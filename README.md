@@ -6,7 +6,7 @@ Bot Discord séparé qui accueille les nouveaux membres dans un fil privé et le
 
 Le tutoriel est organisé en quatre étapes :
 
-1. **Waitlists** — explique qu'une waitlist donne accès à une fonctionnalité et ne crée pas un rôle Discord.
+1. **Whitelists** — explique qu'une whitelist donne accès à une fonctionnalité et ne crée pas un rôle Discord.
 2. **Rôle personnel** — présente la WL Perso, le panneau de gestion du rôle et la commande `/perso @membre`.
 3. **Vocal personnel** — présente la WL PV et le panneau de création et de gestion du salon vocal.
 4. **Support** — indique comment ouvrir un ticket owner si un accès manque ou si une aide est nécessaire.

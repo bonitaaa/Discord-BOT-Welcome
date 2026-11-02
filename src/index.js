@@ -4,13 +4,17 @@ const {
   ButtonStyle,
   ChannelType,
   Client,
-  EmbedBuilder,
+  ContainerBuilder,
   Events,
   GatewayIntentBits,
+  MessageFlags,
   PermissionFlagsBits,
   REST,
   Routes,
+  SeparatorBuilder,
+  SeparatorSpacingSize,
   SlashCommandBuilder,
+  TextDisplayBuilder,
 } = require('discord.js');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -70,7 +74,7 @@ const copy = {
     progress: (current, total) => `Étape ${current}/${total}`,
     wrong: 'Ce n’est pas la bonne réponse.',
     doneTitle: 'Tu connais maintenant l’essentiel',
-    done: `Tu sais comment fonctionnent les waitlists, les rôles personnels, les vocaux personnels et le support. Bienvenue sur pvcool !`,
+    done: `Tu sais comment fonctionnent les whitelists, les rôles personnels, les vocaux personnels et le support. Bienvenue sur pvcool !`,
     expired: 'Ce bouton appartient à une ancienne étape. Utilise les boutons du message actuel.',
     unavailable: 'Ce parcours n’est plus actif. Relance `/welcome-test` si nécessaire.',
   },
@@ -81,7 +85,7 @@ const copy = {
     progress: (current, total) => `Step ${current}/${total}`,
     wrong: 'That is not the correct answer.',
     doneTitle: 'You now know the essentials',
-    done: 'You now understand waitlists, personal roles, personal voice channels and support. Welcome to pvcool!',
+    done: 'You now understand whitelists, personal roles, personal voice channels and support. Welcome to pvcool!',
     expired: 'This button belongs to an older step. Use the buttons on the current message.',
     unavailable: 'This tutorial is no longer active. Run `/welcome-test` again if needed.',
   },
@@ -91,24 +95,24 @@ const tutorial = [
   {
     id: 'waitlists',
     fr: {
-      question: 'À quoi sert une waitlist sur pvcool ?',
-      description: 'Les waitlists contrôlent l’accès aux fonctions sensibles du serveur.',
+      question: 'À quoi sert une whitelist sur pvcool ?',
+      description: 'Les whitelists contrôlent l’accès aux fonctions sensibles du serveur.',
       answers: [
         ['role', 'À recevoir un rôle Discord', false],
         ['permission', 'À autoriser une fonction précise', true],
         ['cosmetic', 'À changer la couleur du pseudo', false],
       ],
-      feedback: 'Une waitlist est une autorisation enregistrée par le bot, pas un rôle Discord. Elle donne accès uniquement à la fonction concernée.',
+      feedback: 'Une whitelist est une autorisation enregistrée par le bot, pas un rôle Discord. Elle donne accès uniquement à la fonction concernée.',
     },
     en: {
-      question: 'What is a pvcool waitlist for?',
-      description: 'Waitlists control access to sensitive server features.',
+      question: 'What is a pvcool whitelist for?',
+    description: 'Whitelists control access to sensitive server features.',
       answers: [
         ['role', 'Receiving a Discord role', false],
         ['permission', 'Authorizing one specific feature', true],
         ['cosmetic', 'Changing nickname colour', false],
       ],
-      feedback: 'A waitlist is a permission stored by the bot, not a Discord role. It only unlocks the related feature.',
+      feedback: 'A whitelist is a permission stored by the bot, not a Discord role. It only unlocks the related feature.',
     },
   },
   {
@@ -121,17 +125,17 @@ const tutorial = [
         ['panel', 'Avec le panneau et la WL Perso', true],
         ['manual', 'En créant le rôle à la main', false],
       ],
-      feedback: `Il faut la waitlist Perso puis utiliser le panneau de <#${config.personalRoleChannelId}>. La commande /my-role n’existe plus. /perso @membre sert uniquement à partager ou retirer ton rôle.`,
+      feedback: `Il faut la whitelist Perso puis utiliser le panneau de <#${config.personalRoleChannelId}>. La commande /my-role n’existe plus. /perso @membre sert uniquement à partager ou retirer ton rôle.`,
     },
     en: {
       question: 'How do you create and manage your personal role?',
       description: `Use the dedicated panel in <#${config.personalRoleChannelId}>.`,
       answers: [
         ['myrole', 'With /my-role', false],
-        ['panel', 'With the panel and Perso waitlist', true],
+        ['panel', 'With the panel and Perso whitelist', true],
         ['manual', 'By creating it manually', false],
       ],
-      feedback: `You need the Perso waitlist and must use the panel in <#${config.personalRoleChannelId}>. /my-role was removed. /perso @member only shares or removes your role.`,
+      feedback: `You need the Perso whitelist and must use the panel in <#${config.personalRoleChannelId}>. /my-role was removed. /perso @member only shares or removes your role.`,
     },
   },
   {
@@ -144,7 +148,7 @@ const tutorial = [
         ['unlimited', 'Je peux en créer plusieurs', false],
         ['panel', 'Avec le panneau, la WL PV et un seul vocal', true],
       ],
-      feedback: `La waitlist PV est obligatoire. Utilise le panneau de <#${config.personalVoiceChannelId}> pour créer et gérer ton unique vocal personnel.`,
+      feedback: `La whitelist PV est obligatoire. Utilise le panneau de <#${config.personalVoiceChannelId}> pour créer et gérer ton unique vocal personnel.`,
     },
     en: {
       question: 'How does your personal voice channel work?',
@@ -152,9 +156,9 @@ const tutorial = [
       answers: [
         ['slash', 'With the old /pv command', false],
         ['unlimited', 'I can create several channels', false],
-        ['panel', 'With the panel, PV waitlist and one channel', true],
+        ['panel', 'With the panel, PV whitelist and one channel', true],
       ],
-      feedback: `The PV waitlist is required. Use the panel in <#${config.personalVoiceChannelId}> to create and manage your single personal voice channel.`,
+      feedback: `The PV whitelist is required. Use the panel in <#${config.personalVoiceChannelId}> to create and manage your single personal voice channel.`,
     },
   },
   {
@@ -194,36 +198,55 @@ function currentStep(profile) {
 function panel(profile, member) {
   const language = profile.language || 'fr';
   const text = copy[language];
-  const embed = new EmbedBuilder().setColor(0x8b5cf6).setAuthor({
-    name: member.displayName,
-    iconURL: member.displayAvatarURL({ size: 128 }),
-  });
+  const container = new ContainerBuilder().setAccentColor(0x8b5cf6);
 
   if (!profile.language) {
-    embed.setTitle(copy.fr.title).setDescription(`${copy.fr.intro}\n\n**${copy.fr.choose} / ${copy.en.choose}**`);
-    return {
-      embeds: [embed],
-      components: [new ActionRowBuilder().addComponents(
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        `-# PVCool · Intégration privée\n## 👋 ${copy.fr.title}\n**${member.displayName}**, ${copy.fr.intro}\n\n### ${copy.fr.choose} · ${copy.en.choose}`,
+      ),
+    );
+    container.addSeparatorComponents(
+      new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small),
+    );
+    container.addActionRowComponents(
+      new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('welcome:language:fr').setLabel('Français').setEmoji('🇫🇷').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('welcome:language:en').setLabel('English').setEmoji('🇬🇧').setStyle(ButtonStyle.Secondary),
-      )],
+      ),
+    );
+    return {
+      components: [container],
     };
   }
 
   const step = currentStep(profile);
   if (!step) {
-    embed.setColor(0x22c55e).setTitle(text.doneTitle).setDescription(text.done);
-    return { embeds: [embed], components: [] };
+    container.setAccentColor(0x22c55e);
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        `-# PVCool · Parcours terminé\n## ✅ ${text.doneTitle}\n${text.done}`,
+      ),
+    );
+    return { components: [container] };
   }
 
   const localized = step[language];
   const index = tutorial.findIndex((entry) => entry.id === step.id);
-  embed.setTitle(localized.question).setDescription(localized.description).setFooter({ text: text.progress(index + 1, tutorial.length) });
   const buttons = localized.answers.map(([answerId, label]) => new ButtonBuilder()
     .setCustomId(`welcome:tutorial:${step.id}:${answerId}`)
     .setLabel(label)
     .setStyle(ButtonStyle.Primary));
-  return { embeds: [embed], components: [new ActionRowBuilder().addComponents(buttons)] };
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(
+      `-# ${text.progress(index + 1, tutorial.length)} · PVCool\n## ${localized.question}\n${localized.description}`,
+    ),
+  );
+  container.addSeparatorComponents(
+    new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small),
+  );
+  container.addActionRowComponents(new ActionRowBuilder().addComponents(buttons));
+  return { components: [container] };
 }
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers] });
@@ -258,11 +281,36 @@ async function createWelcomeThread(member, { forceReset = false } = {}) {
   }
 
   const payload = { ...panel(profile, member), allowedMentions: { parse: [] } };
+  if (message && !message.flags.has(MessageFlags.IsComponentsV2)) {
+    await message.delete().catch(() => {});
+    message = null;
+  }
   if (message) await message.edit(payload);
-  else message = await thread.send(payload);
+  else message = await thread.send({ ...payload, flags: MessageFlags.IsComponentsV2 });
   state.sessions[member.id] = { threadId: thread.id, messageId: message.id };
   saveState();
   return thread;
+}
+
+async function updateWelcomePanel(interaction, profile, member) {
+  const payload = { ...panel(profile, member), allowedMentions: { parse: [] } };
+
+  if (interaction.message.flags.has(MessageFlags.IsComponentsV2)) {
+    return interaction.update(payload);
+  }
+
+  await interaction.deferUpdate();
+  const replacement = await interaction.channel.send({
+    ...payload,
+    flags: MessageFlags.IsComponentsV2,
+  });
+  await interaction.message.delete().catch(() => {});
+  state.sessions[interaction.user.id] = {
+    threadId: interaction.channelId,
+    messageId: replacement.id,
+  };
+  saveState();
+  return replacement;
 }
 
 function canConfigure(userId) {
@@ -337,7 +385,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (kind === 'language') {
       profile.language = first === 'en' ? 'en' : 'fr';
       saveState();
-      return interaction.update({ ...panel(profile, member), allowedMentions: { parse: [] } });
+      return updateWelcomePanel(interaction, profile, member);
     }
 
     if (kind === 'tutorial') {
@@ -348,7 +396,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (!answer?.[2]) return interaction.reply({ content: `❌ **${copy[language].wrong}**\n${localized.feedback}`, ephemeral: true });
       profile.completed.push(step.id);
       saveState();
-      await interaction.update({ ...panel(profile, member), allowedMentions: { parse: [] } });
+      await updateWelcomePanel(interaction, profile, member);
       if (!currentStep(profile)) {
         setTimeout(async () => {
           const thread = await interaction.guild.channels.fetch(session.threadId).catch(() => null);
