@@ -119,46 +119,46 @@ const tutorial = [
     id: 'personal-role',
     fr: {
       question: 'Comment créer et gérer ton rôle personnel ?',
-      description: `Le panneau dédié se trouve dans <#${config.personalRoleChannelId}>.`,
+      description: `Dans <#${config.personalRoleChannelId}>, tu peux créer un seul rôle à ton image : nom, couleur, icône ou émoji du serveur et membres interdits.`,
       answers: [
         ['myrole', 'Avec /my-role', false],
         ['panel', 'Avec le panneau et la WL Perso', true],
         ['manual', 'En créant le rôle à la main', false],
       ],
-      feedback: `Il faut la whitelist Perso puis utiliser le panneau de <#${config.personalRoleChannelId}>. La commande /my-role n’existe plus. /perso @membre sert uniquement à partager ou retirer ton rôle.`,
+      feedback: `La whitelist Perso est obligatoire. Depuis <#${config.personalRoleChannelId}>, crée puis modifie ton unique rôle : nom, couleur unie, dégradée ou holographique, icône ou émoji et membres interdits. Utilise ensuite /perso @membre pour l’ajouter ou le retirer à quelqu’un. Les modifications ont un délai de 5 secondes et ne doivent pas être faites manuellement. Sans whitelist, ouvre un ticket owner dans <#${config.supportChannelId}>.`,
     },
     en: {
       question: 'How do you create and manage your personal role?',
-      description: `Use the dedicated panel in <#${config.personalRoleChannelId}>.`,
+      description: `In <#${config.personalRoleChannelId}>, you can create one custom role with its own name, colour, icon or server emoji and blocked members.`,
       answers: [
         ['myrole', 'With /my-role', false],
         ['panel', 'With the panel and Perso whitelist', true],
         ['manual', 'By creating it manually', false],
       ],
-      feedback: `You need the Perso whitelist and must use the panel in <#${config.personalRoleChannelId}>. /my-role was removed. /perso @member only shares or removes your role.`,
+      feedback: `The Perso whitelist is required. In <#${config.personalRoleChannelId}>, create and edit your single role: name, solid, gradient or holographic colour, icon or emoji and blocked members. Then use /perso @member to add or remove it from someone. Changes have a 5-second cooldown and must not be made manually. Without the whitelist, open an owner ticket in <#${config.supportChannelId}>.`,
     },
   },
   {
     id: 'personal-voice',
     fr: {
       question: 'Comment fonctionne ton salon vocal personnel ?',
-      description: `Toute la gestion se fait depuis <#${config.personalVoiceChannelId}>.`,
+      description: `Dans <#${config.personalVoiceChannelId}>, tu peux créer un seul vocal, le renommer, le rendre privé ou public et gérer ses accès.`,
       answers: [
         ['slash', 'Avec l’ancienne commande /pv', false],
         ['unlimited', 'Je peux en créer plusieurs', false],
         ['panel', 'Avec le panneau, la WL PV et un seul vocal', true],
       ],
-      feedback: `La whitelist PV est obligatoire. Utilise le panneau de <#${config.personalVoiceChannelId}> pour créer et gérer ton unique vocal personnel.`,
+      feedback: `La whitelist PV est obligatoire. Le panneau de <#${config.personalVoiceChannelId}> permet de créer ton unique vocal, choisir son nom, le passer en privé ou public, ajouter ou retirer l’accès à des membres ou des rôles, puis le supprimer. Seul son propriétaire peut le gérer et il est supprimé après 7 jours sans activité humaine. Sans whitelist, ouvre un ticket owner dans <#${config.supportChannelId}>.`,
     },
     en: {
       question: 'How does your personal voice channel work?',
-      description: `Everything is managed from <#${config.personalVoiceChannelId}>.`,
+      description: `In <#${config.personalVoiceChannelId}>, you can create one voice channel, rename it, make it private or public and manage access.`,
       answers: [
         ['slash', 'With the old /pv command', false],
         ['unlimited', 'I can create several channels', false],
         ['panel', 'With the panel, PV whitelist and one channel', true],
       ],
-      feedback: `The PV whitelist is required. Use the panel in <#${config.personalVoiceChannelId}> to create and manage your single personal voice channel.`,
+      feedback: `The PV whitelist is required. The panel in <#${config.personalVoiceChannelId}> lets you create your single voice channel, choose its name, switch it between private and public, grant or remove access for members or roles, and delete it. Only its owner can manage it, and it is removed after 7 days without human activity. Without the whitelist, open an owner ticket in <#${config.supportChannelId}>.`,
     },
   },
   {
