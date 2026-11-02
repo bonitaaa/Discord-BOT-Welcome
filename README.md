@@ -2,6 +2,8 @@
 
 Bot Discord séparé qui crée un fil d'accueil à chaque arrivée et accompagne le membre par étapes :
 
+Le parcours est actuellement désactivé par défaut. Tant que `WELCOME_ENABLED=false`, le bot ne crée aucun fil et n'envoie aucune question ni aucun message à l'arrivée. Passe cette variable à `true` uniquement pour le réactiver.
+
 - choix de la langue ;
 - pays ;
 - genre ;

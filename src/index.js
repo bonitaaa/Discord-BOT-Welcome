@@ -19,6 +19,7 @@ const path = require('node:path');
 const token = process.env.DISCORD_TOKEN;
 const clientId = process.env.CLIENT_ID;
 const guildId = process.env.GUILD_ID;
+const welcomeEnabled = process.env.WELCOME_ENABLED === 'true';
 
 if (!token || !guildId) {
   throw new Error('DISCORD_TOKEN et GUILD_ID sont obligatoires.');
@@ -272,9 +273,13 @@ client.once(Events.ClientReady, async (readyClient) => {
   }
 
   console.log(`Connecté en tant que ${readyClient.user.tag}.`);
+  console.log(`Parcours d’accueil : ${welcomeEnabled ? 'activé' : 'désactivé'}.`);
 });
 
-client.on(Events.GuildMemberAdd, (member) => createWelcomeThread(member).catch(console.error));
+client.on(Events.GuildMemberAdd, (member) => {
+  if (!welcomeEnabled) return;
+  createWelcomeThread(member).catch(console.error);
+});
 
 client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.isChatInputCommand()) {
@@ -288,6 +293,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return interaction.reply({ content: `✅ Les prochains fils d’accueil seront créés depuis ${channel}.`, ephemeral: true });
     }
     if (interaction.commandName === 'welcome-test') {
+      if (!welcomeEnabled) {
+        return interaction.reply({
+          content: 'Le parcours d’accueil est temporairement désactivé.',
+          ephemeral: true,
+        });
+      }
+
       state.profiles[interaction.user.id] = {};
       await saveState();
       await interaction.reply({ content: 'Création de ton fil de test…', ephemeral: true });
@@ -297,6 +309,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   if (!interaction.isButton() && !interaction.isStringSelectMenu()) return;
   if (!interaction.customId.startsWith('welcome:')) return;
+  if (!welcomeEnabled) {
+    return interaction.reply({
+      content: 'Le parcours d’accueil est temporairement désactivé.',
+      ephemeral: true,
+    });
+  }
   const session = state.sessions[interaction.user.id];
   if (!session || interaction.channelId !== session.threadId) {
     return interaction.reply({ content: 'Ce panneau d’accueil ne t’appartient pas.', ephemeral: true });
