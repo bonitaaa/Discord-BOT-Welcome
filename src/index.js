@@ -20,6 +20,7 @@ const token = process.env.DISCORD_TOKEN;
 const clientId = process.env.CLIENT_ID;
 const guildId = process.env.GUILD_ID;
 const welcomeEnabled = process.env.WELCOME_ENABLED === 'true';
+const privateTesterId = process.env.WELCOME_TESTER_ID || '317270244815011840';
 
 if (!token || !guildId) {
   throw new Error('DISCORD_TOKEN et GUILD_ID sont obligatoires.');
@@ -188,7 +189,7 @@ async function updateChoiceRoles(member, group, selectedValues) {
   if (addable.length) await member.roles.add(addable, 'Choix effectué pendant l’accueil').catch(console.error);
 }
 
-async function createWelcomeThread(member, forceReset = false) {
+async function createWelcomeThread(member, forceReset = false, testMode = false) {
   const channelId = state.config[member.guild.id]?.channelId || process.env.WELCOME_CHANNEL_ID;
   if (!channelId) return;
   const channel = await member.guild.channels.fetch(channelId).catch(() => null);
@@ -198,8 +199,13 @@ async function createWelcomeThread(member, forceReset = false) {
   if (oldSession?.threadId) {
     const existing = await member.guild.channels.fetch(oldSession.threadId).catch(() => null);
     if (existing?.isThread()) {
+      let sessionChanged = false;
       if (existing.archived) await existing.setArchived(false, 'Réouverture du parcours d’accueil').catch(() => null);
       await existing.members.add(member.id).catch(() => null);
+      if (oldSession.testMode !== testMode) {
+        oldSession.testMode = testMode;
+        sessionChanged = true;
+      }
       if (forceReset) {
         const oldMessage = await existing.messages.fetch(oldSession.messageId).catch(() => null);
         if (oldMessage) await oldMessage.edit(panel({}, member));
@@ -207,8 +213,9 @@ async function createWelcomeThread(member, forceReset = false) {
           const message = await existing.send(panel({}, member));
           oldSession.messageId = message.id;
         }
-        await saveState();
+        sessionChanged = true;
       }
+      if (sessionChanged) await saveState();
       return;
     }
   }
@@ -237,7 +244,12 @@ async function createWelcomeThread(member, forceReset = false) {
   await thread.members.add(member.id).catch(() => null);
   const profile = state.profiles[member.id] || {};
   const message = await thread.send(panel(profile, member));
-  state.sessions[member.id] = { threadId: thread.id, messageId: message.id, guildId: member.guild.id };
+  state.sessions[member.id] = {
+    threadId: thread.id,
+    messageId: message.id,
+    guildId: member.guild.id,
+    testMode,
+  };
   await saveState();
 }
 
@@ -283,6 +295,18 @@ client.on(Events.GuildMemberAdd, (member) => {
 
 client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.isChatInputCommand()) {
+    if (interaction.commandName === 'welcome-test') {
+      if (interaction.user.id !== privateTesterId) {
+        return interaction.reply({ content: 'Cette commande de test est privée.', ephemeral: true });
+      }
+
+      state.profiles[interaction.user.id] = {};
+      await saveState();
+      await interaction.reply({ content: 'Création de ton fil de test…', ephemeral: true });
+      const member = await interaction.guild.members.fetch(interaction.user.id);
+      return createWelcomeThread(member, true, true);
+    }
+
     const permitted = owners.has(interaction.user.id) || interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild);
     if (!permitted) return interaction.reply({ content: 'Tu ne peux pas configurer ce système.', ephemeral: true });
 
@@ -292,30 +316,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await saveState();
       return interaction.reply({ content: `✅ Les prochains fils d’accueil seront créés depuis ${channel}.`, ephemeral: true });
     }
-    if (interaction.commandName === 'welcome-test') {
-      if (!welcomeEnabled) {
-        return interaction.reply({
-          content: 'Le parcours d’accueil est temporairement désactivé.',
-          ephemeral: true,
-        });
-      }
-
-      state.profiles[interaction.user.id] = {};
-      await saveState();
-      await interaction.reply({ content: 'Création de ton fil de test…', ephemeral: true });
-      return createWelcomeThread(await interaction.guild.members.fetch(interaction.user.id), true);
-    }
   }
 
   if (!interaction.isButton() && !interaction.isStringSelectMenu()) return;
   if (!interaction.customId.startsWith('welcome:')) return;
-  if (!welcomeEnabled) {
+  const session = state.sessions[interaction.user.id];
+  const privateTestActive = interaction.user.id === privateTesterId && session?.testMode === true;
+  if (!welcomeEnabled && !privateTestActive) {
     return interaction.reply({
       content: 'Le parcours d’accueil est temporairement désactivé.',
       ephemeral: true,
     });
   }
-  const session = state.sessions[interaction.user.id];
   if (!session || interaction.channelId !== session.threadId) {
     return interaction.reply({ content: 'Ce panneau d’accueil ne t’appartient pas.', ephemeral: true });
   }
