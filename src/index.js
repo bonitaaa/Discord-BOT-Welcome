@@ -20,8 +20,8 @@ const token = process.env.DISCORD_TOKEN;
 const clientId = process.env.CLIENT_ID;
 const guildId = process.env.GUILD_ID;
 
-if (!token || !clientId || !guildId) {
-  throw new Error('DISCORD_TOKEN, CLIENT_ID et GUILD_ID sont obligatoires.');
+if (!token || !guildId) {
+  throw new Error('DISCORD_TOKEN et GUILD_ID sont obligatoires.');
 }
 
 const owners = new Set((process.env.OWNER_IDS || '317270244815011840,1526355772831957012')
@@ -258,9 +258,20 @@ const client = new Client({
 });
 
 client.once(Events.ClientReady, async (readyClient) => {
+  const applicationId = clientId || readyClient.user.id;
   const rest = new REST({ version: '10' }).setToken(token);
-  await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body: commands });
-  console.log(`Connecté en tant que ${readyClient.user.tag} · ${commands.length} commandes enregistrées.`);
+
+  try {
+    await rest.put(Routes.applicationGuildCommands(applicationId, guildId), { body: commands });
+    console.log(`${commands.length} commande(s) enregistrée(s) sur le serveur ${guildId}.`);
+  } catch (error) {
+    console.error(
+      'Impossible d’enregistrer les commandes. Le bot reste connecté ; vérifie GUILD_ID et les autorisations de l’application.',
+      error,
+    );
+  }
+
+  console.log(`Connecté en tant que ${readyClient.user.tag}.`);
 });
 
 client.on(Events.GuildMemberAdd, (member) => createWelcomeThread(member).catch(console.error));
@@ -315,5 +326,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
 client.on(Events.Error, console.error);
 process.on('unhandledRejection', console.error);
-client.login(token);
+client.login(token).catch((error) => {
+  console.error(
+    'Connexion Discord impossible. Vérifie DISCORD_TOKEN et active Server Members Intent dans le portail Discord.',
+    error,
+  );
+  process.exit(1);
+});
 

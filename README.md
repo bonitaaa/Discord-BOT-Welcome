@@ -22,6 +22,8 @@ Le bot modifie un seul panneau dans le fil au lieu d'envoyer une suite de messag
 
 `WELCOME_CHANNEL_ID` peut remplacer `/welcome-config`.
 
+Variables indispensables : `DISCORD_TOKEN` et `GUILD_ID`. `CLIENT_ID` est facultatif : le bot utilise automatiquement l'identifiant de son application.
+
 ## Rôles automatiques
 
 Les quatre variables `*_ROLE_IDS` sont des objets JSON. Exemple :
