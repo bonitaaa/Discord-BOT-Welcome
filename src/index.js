@@ -13,8 +13,10 @@ const {
   Routes,
   SeparatorBuilder,
   SeparatorSpacingSize,
+  SectionBuilder,
   SlashCommandBuilder,
   TextDisplayBuilder,
+  ThumbnailBuilder,
 } = require('discord.js');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -346,27 +348,39 @@ function verificationPanel(member, status = 'pending', moderator = null) {
     : (rejected
       ? { color: 0xed4245, eyebrow: 'VÉRIFICATION REFUSÉE', title: '⛔ Membre expulsé' }
       : { color: 0xf59e0b, eyebrow: 'VÉRIFICATION EN ATTENTE', title: '🕓 Nouvelle arrivée' });
-  const content = [
-    ...(!accepted && !rejected ? [[...VERIFICATION_MODERATOR_ROLE_IDS].map((roleId) => `<@&${roleId}>`).join(' ')] : []),
-    `**PVCool · ${presentation.eyebrow}**`,
-    `## ${presentation.title}`,
-    `**Membre** — ${member}`,
-    `**Identifiant** — \`${member.id}\``,
-    `**Compte créé** — <t:${Math.floor(member.user.createdTimestamp / 1000)}:F>`,
-    `**Ancienneté** — <t:${Math.floor(member.user.createdTimestamp / 1000)}:R>`,
-    `**Arrivée** — <t:${Math.floor((member.joinedTimestamp || Date.now()) / 1000)}:R>`,
-    ...(moderator ? [`**Traité par** — ${moderator}`] : []),
-    '',
-    rejected
-      ? 'Le membre peut revenir et demander une nouvelle vérification. Les retours répétés servant à forcer entraînent un bannissement.'
-      : (accepted
-        ? 'Le rôle d’attente a été retiré et le parcours d’accueil a été lancé.'
-        : 'Accepter retire le rôle d’attente · Refuser expulse le membre · Le fil permet un échange privé.'),
-  ].join('\n');
+  const details = new SectionBuilder()
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent([
+        `## ${presentation.title}`,
+        `**Membre** — ${member}`,
+        `-# Identifiant : ${member.id}`,
+        '',
+        `**Compte créé** — <t:${Math.floor(member.user.createdTimestamp / 1000)}:F>`,
+        `**Ancienneté** — <t:${Math.floor(member.user.createdTimestamp / 1000)}:R>`,
+        `**Arrivée** — <t:${Math.floor((member.joinedTimestamp || Date.now()) / 1000)}:R>`,
+        ...(moderator ? [`**Traité par** — ${moderator}`] : []),
+      ].join('\n')),
+    )
+    .setThumbnailAccessory(
+      new ThumbnailBuilder()
+        .setURL(member.displayAvatarURL({ size: 256 }))
+        .setDescription(`Avatar de ${member.user.username}`),
+    );
+  const container = new ContainerBuilder()
+    .setAccentColor(presentation.color)
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent([
+        ...(!accepted && !rejected
+          ? [[...VERIFICATION_MODERATOR_ROLE_IDS].map((roleId) => `<@&${roleId}>`).join(' ')]
+          : []),
+        `-# PVCool · ${presentation.eyebrow}`,
+      ].join('\n')),
+    )
+    .addSectionComponents(details)
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small));
 
-  const components = [];
   if (!accepted && !rejected) {
-    components.push(
+    container.addActionRowComponents(
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId(`verification:accept:${member.id}`)
@@ -385,8 +399,19 @@ function verificationPanel(member, status = 'pending', moderator = null) {
           .setStyle(ButtonStyle.Secondary),
       ),
     );
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent('-# Accepter retire le rôle d’attente · Refuser expulse le membre · Le fil permet un échange privé.'),
+    );
+  } else if (rejected) {
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent('-# Le membre peut revenir et demander une nouvelle vérification. Les retours répétés servant à forcer entraînent un bannissement.'),
+    );
+  } else {
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent('-# Le rôle d’attente a été retiré et le parcours d’accueil a été lancé.'),
+    );
   }
-  return { content, components };
+  return { components: [container], flags: MessageFlags.IsComponentsV2 };
 }
 
 async function beginVerification(member) {
