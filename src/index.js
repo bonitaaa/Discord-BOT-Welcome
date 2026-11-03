@@ -33,6 +33,7 @@ const config = {
   waitingRoleId: process.env.WAITING_ROLE_ID || '1567273149739966504',
   waitingChannelId: process.env.WAITING_CHANNEL_ID || '1567273450085687338',
   verificationChannelId: process.env.VERIFICATION_CHANNEL_ID || '1567273469270564966',
+  verifiedWelcomeChannelId: process.env.VERIFIED_WELCOME_CHANNEL_ID || '1563618087255941381',
   dataFile: process.env.DATA_FILE || path.join(process.env.DATA_DIR || path.join(process.cwd(), 'data'), 'welcome-state.json'),
 };
 
@@ -61,6 +62,11 @@ function loadState() {
 }
 
 let state = loadState();
+const authorizedWaitingRoleRemovals = new Set();
+
+function waitingRoleId() {
+  return state.config.waitingRoleId || config.waitingRoleId;
+}
 
 function saveState() {
   const folder = path.dirname(config.dataFile);
@@ -255,19 +261,20 @@ function panel(profile, member) {
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers] });
 
-async function findWelcomeChannel(guild) {
-  const channelId = state.config.welcomeChannelId || config.welcomeChannelId;
+async function findWelcomeChannel(guild, channelId = null) {
+  channelId ||= state.config.welcomeChannelId || config.welcomeChannelId;
   if (!channelId) return null;
   return guild.channels.fetch(channelId).catch(() => null);
 }
 
-async function createWelcomeThread(member, { forceReset = false } = {}) {
-  const channel = await findWelcomeChannel(member.guild);
+async function createWelcomeThread(member, { forceReset = false, channelId = null } = {}) {
+  const channel = await findWelcomeChannel(member.guild, channelId);
   if (!channel?.threads) throw new Error('Le salon d’accueil configuré ne permet pas de créer des fils.');
   if (forceReset) state.profiles[member.id] = { language: null, completed: [] };
   const profile = profileFor(member.id);
   const previous = state.sessions[member.id];
   let thread = previous?.threadId ? await member.guild.channels.fetch(previous.threadId).catch(() => null) : null;
+  if (thread?.isThread() && thread.parentId !== channel.id) thread = null;
   let message = null;
 
   if (thread?.isThread()) {
@@ -364,8 +371,8 @@ function verificationPanel(member, status = 'pending', moderator = null) {
 }
 
 async function beginVerification(member) {
-  const role = await member.guild.roles.fetch(config.waitingRoleId).catch(() => null);
-  if (!role) throw new Error(`Rôle d’attente ${config.waitingRoleId} introuvable.`);
+  const role = await member.guild.roles.fetch(waitingRoleId()).catch(() => null);
+  if (!role) throw new Error(`Rôle d’attente ${waitingRoleId()} introuvable.`);
   if (!role.editable) throw new Error(`Le rôle d’attente ${role.name} doit être placé sous Welcomebot.`);
   await member.roles.add(role, 'Mise en attente automatique à l’arrivée');
 
@@ -408,8 +415,8 @@ async function configureWaitingRoleChannel(channel, role) {
 }
 
 async function enforceWaitingRolePermissions(guild) {
-  const role = await guild.roles.fetch(config.waitingRoleId).catch(() => null);
-  if (!role) throw new Error(`Rôle d’attente ${config.waitingRoleId} introuvable.`);
+  const role = await guild.roles.fetch(waitingRoleId()).catch(() => null);
+  if (!role) throw new Error(`Rôle d’attente ${waitingRoleId()} introuvable.`);
   if (role.permissions.bitfield !== 0n) {
     await role.setPermissions(0n, 'Le rôle non vérifié ne doit posséder aucune permission générale');
   }
@@ -417,6 +424,41 @@ async function enforceWaitingRolePermissions(guild) {
   for (const channel of guild.channels.cache.values()) {
     await configureWaitingRoleChannel(channel, role);
   }
+}
+
+async function recreateWaitingRole(deletedRole) {
+  const guild = deletedRole.guild;
+  const affectedMemberIds = new Set(deletedRole.members.keys());
+  const botMember = guild.members.me;
+  const role = await guild.roles.create({
+    name: deletedRole.name,
+    color: deletedRole.color,
+    hoist: false,
+    mentionable: false,
+    permissions: 0n,
+    reason: 'Recréation automatique du rôle non vérifié protégé',
+  });
+  if (botMember) {
+    await role.setPosition(Math.max(1, botMember.roles.highest.position - 1), 'Placement du rôle non vérifié recréé').catch(() => {});
+  }
+  state.config.waitingRoleId = role.id;
+  saveState();
+  await enforceWaitingRolePermissions(guild);
+  await guild.members.fetch();
+  for (const memberId of affectedMemberIds) {
+    const member = guild.members.cache.get(memberId);
+    if (!member || member.user.bot) continue;
+    await member.roles.add(role, 'Restauration du rôle non vérifié après sa suppression').catch(console.error);
+  }
+  for (const [memberId, record] of Object.entries(state.verifications)) {
+    if (record.status === 'accepted') continue;
+    if (affectedMemberIds.has(memberId)) continue;
+    const member = guild.members.cache.get(memberId);
+    if (!member || member.user.bot) continue;
+    await member.roles.add(role, 'Restauration du rôle non vérifié après sa suppression').catch(console.error);
+  }
+  console.log(`Rôle non vérifié recréé : ${role.id}.`);
+  return role;
 }
 
 async function removeLegacyMemberPermissionOverwrites(guild) {
@@ -487,11 +529,11 @@ client.once(Events.ClientReady, async (readyClient) => {
   await readyClient.user.setPresence({ status: 'invisible', activities: [] });
   const guild = await readyClient.guilds.fetch(config.guildId);
   const [waitingRole, waitingChannel, verificationChannel] = await Promise.all([
-    guild.roles.fetch(config.waitingRoleId).catch(() => null),
+    guild.roles.fetch(waitingRoleId()).catch(() => null),
     guild.channels.fetch(config.waitingChannelId).catch(() => null),
     guild.channels.fetch(config.verificationChannelId).catch(() => null),
   ]);
-  if (!waitingRole) console.error(`Rôle d’attente introuvable : ${config.waitingRoleId}`);
+  if (!waitingRole) console.error(`Rôle d’attente introuvable : ${waitingRoleId()}`);
   if (!waitingChannel?.isTextBased()) console.error(`Salon d’attente introuvable : ${config.waitingChannelId}`);
   if (!verificationChannel?.isTextBased()) console.error(`Salon de vérification introuvable : ${config.verificationChannelId}`);
   await enforceWaitingRolePermissions(guild).catch((error) => {
@@ -504,10 +546,39 @@ client.once(Events.ClientReady, async (readyClient) => {
 });
 
 client.on(Events.ChannelCreate, async (channel) => {
-  const role = await channel.guild.roles.fetch(config.waitingRoleId).catch(() => null);
+  const role = await channel.guild.roles.fetch(waitingRoleId()).catch(() => null);
   if (!role) return;
   await configureWaitingRoleChannel(channel, role).catch((error) => {
     console.error(`Protection du nouveau salon ${channel.id} impossible :`, error);
+  });
+});
+
+client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
+  const roleId = waitingRoleId();
+  if (!oldMember.roles.cache.has(roleId)
+    || newMember.roles.cache.has(roleId)
+    || authorizedWaitingRoleRemovals.has(newMember.id)) return;
+  const record = state.verifications[newMember.id];
+  if (record?.status === 'accepted') return;
+  const role = await newMember.guild.roles.fetch(roleId).catch(() => null);
+  if (!role) return;
+  await newMember.roles.add(role, 'Retrait manuel interdit du rôle non vérifié').catch((error) => {
+    console.error(`Impossible de remettre le rôle non vérifié à ${newMember.user.tag} :`, error);
+  });
+});
+
+client.on(Events.GuildRoleUpdate, async (oldRole, newRole) => {
+  if (newRole.id !== waitingRoleId()) return;
+  if (newRole.permissions.bitfield !== 0n) {
+    await newRole.setPermissions(0n, 'Protection du rôle non vérifié').catch(console.error);
+  }
+  await enforceWaitingRolePermissions(newRole.guild).catch(console.error);
+});
+
+client.on(Events.GuildRoleDelete, async (role) => {
+  if (role.id !== waitingRoleId()) return;
+  await recreateWaitingRole(role).catch((error) => {
+    console.error('Recréation du rôle non vérifié impossible :', error);
   });
 });
 
@@ -542,9 +613,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (record.status === 'accepted') {
           return interaction.reply({ content: 'Ce membre a déjà été accepté.', ephemeral: true });
         }
-        const waitingRole = await interaction.guild.roles.fetch(config.waitingRoleId).catch(() => null);
+        const waitingRole = await interaction.guild.roles.fetch(waitingRoleId()).catch(() => null);
         if (waitingRole && member.roles.cache.has(waitingRole.id)) {
+          authorizedWaitingRoleRemovals.add(member.id);
           await member.roles.remove(waitingRole, `Vérification acceptée par ${interaction.user.tag}`);
+          setTimeout(() => authorizedWaitingRoleRemovals.delete(member.id), 10_000).unref();
         }
         state.verifications[member.id] = {
           ...record,
@@ -568,6 +641,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
             allowedMentions: { users: [member.id] },
           }).catch(() => {});
         }
+        await createWelcomeThread(member, {
+          channelId: config.verifiedWelcomeChannelId,
+        }).catch((error) => {
+          console.error(`Création du fil d’accueil après vérification impossible pour ${member.user.tag} :`, error);
+        });
         return;
       }
     }
