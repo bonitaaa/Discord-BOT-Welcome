@@ -368,6 +368,7 @@ async function beginVerification(member) {
   if (!role) throw new Error(`Rôle d’attente ${config.waitingRoleId} introuvable.`);
   if (!role.editable) throw new Error(`Le rôle d’attente ${role.name} doit être placé sous Welcomebot.`);
   await member.roles.add(role, 'Mise en attente automatique à l’arrivée');
+  const restrictedChannelIds = await enforceWaitingMemberPermissions(member);
 
   const waitingChannel = await member.guild.channels.fetch(config.waitingChannelId).catch(() => null);
   if (waitingChannel?.isTextBased()) {
@@ -384,6 +385,7 @@ async function beginVerification(member) {
     status: 'pending',
     messageId: message.id,
     threadId: null,
+    restrictedChannelIds,
     createdAt: Date.now(),
   };
   saveState();
@@ -413,6 +415,40 @@ async function enforceWaitingRolePermissions(guild) {
   await guild.channels.fetch();
   for (const channel of guild.channels.cache.values()) {
     await configureWaitingRoleChannel(channel, role);
+  }
+}
+
+async function configureWaitingMemberChannel(channel, member) {
+  if (!channel || channel.isThread?.() || !('permissionOverwrites' in channel)) return false;
+  const isWaitingChannel = channel.id === config.waitingChannelId;
+  await channel.permissionOverwrites.edit(
+    member,
+    isWaitingChannel
+      ? { ViewChannel: true, SendMessages: true, ReadMessageHistory: true, AddReactions: true }
+      : { ViewChannel: false },
+    isWaitingChannel ? 'Accès du membre au salon d’attente' : 'Masquage individuel du serveur avant vérification',
+  );
+  return true;
+}
+
+async function enforceWaitingMemberPermissions(member) {
+  await member.guild.channels.fetch();
+  const restrictedChannelIds = [];
+  for (const channel of member.guild.channels.cache.values()) {
+    if (await configureWaitingMemberChannel(channel, member)) restrictedChannelIds.push(channel.id);
+  }
+  return restrictedChannelIds;
+}
+
+async function clearWaitingMemberPermissions(member, restrictedChannelIds = null) {
+  await member.guild.channels.fetch();
+  const ids = new Set(restrictedChannelIds?.length
+    ? restrictedChannelIds
+    : member.guild.channels.cache.filter((channel) => !channel.isThread?.()).map((channel) => channel.id));
+  for (const channelId of ids) {
+    const channel = member.guild.channels.cache.get(channelId);
+    if (!channel || !('permissionOverwrites' in channel)) continue;
+    await channel.permissionOverwrites.delete(member, 'Vérification acceptée : restauration des accès normaux').catch(() => {});
   }
 }
 
@@ -475,6 +511,23 @@ client.once(Events.ClientReady, async (readyClient) => {
   await enforceWaitingRolePermissions(guild).catch((error) => {
     console.error('Configuration des permissions du rôle d’attente impossible :', error);
   });
+  if (waitingRole) {
+    await guild.members.fetch().catch(() => null);
+    for (const member of waitingRole.members.values()) {
+      const restrictedChannelIds = await enforceWaitingMemberPermissions(member).catch((error) => {
+        console.error(`Masquage individuel impossible pour ${member.user.tag} :`, error);
+        return null;
+      });
+      if (restrictedChannelIds) {
+        state.verifications[member.id] = {
+          ...(state.verifications[member.id] || {}),
+          status: state.verifications[member.id]?.status || 'pending',
+          restrictedChannelIds,
+        };
+      }
+    }
+    saveState();
+  }
   console.log(`Welcomebot connecté : ${readyClient.user.tag} · accueil ${config.enabled ? 'activé' : 'désactivé'}`);
 });
 
@@ -484,6 +537,16 @@ client.on(Events.ChannelCreate, async (channel) => {
   await configureWaitingRoleChannel(channel, role).catch((error) => {
     console.error(`Protection du nouveau salon ${channel.id} impossible :`, error);
   });
+  await channel.guild.members.fetch().catch(() => null);
+  for (const member of role.members.values()) {
+    await configureWaitingMemberChannel(channel, member).catch((error) => {
+      console.error(`Masquage du nouveau salon ${channel.id} pour ${member.user.tag} impossible :`, error);
+    });
+    const record = state.verifications[member.id] || { status: 'pending' };
+    record.restrictedChannelIds = [...new Set([...(record.restrictedChannelIds || []), channel.id])];
+    state.verifications[member.id] = record;
+  }
+  saveState();
 });
 
 client.on(Events.GuildMemberAdd, async (member) => {
@@ -521,6 +584,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (waitingRole && member.roles.cache.has(waitingRole.id)) {
           await member.roles.remove(waitingRole, `Vérification acceptée par ${interaction.user.tag}`);
         }
+        await clearWaitingMemberPermissions(member, record.restrictedChannelIds);
         state.verifications[member.id] = {
           ...record,
           status: 'accepted',
