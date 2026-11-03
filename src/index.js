@@ -389,14 +389,42 @@ async function beginVerification(member) {
   saveState();
 }
 
+async function configureWaitingRoleChannel(channel, role) {
+  if (!channel || channel.isThread?.() || !('permissionOverwrites' in channel)) return;
+  const isWaitingChannel = channel.id === config.waitingChannelId;
+  const permissions = isWaitingChannel
+    ? {
+      ViewChannel: true,
+      SendMessages: true,
+      ReadMessageHistory: true,
+      AddReactions: true,
+    }
+    : { ViewChannel: false };
+  await channel.permissionOverwrites.edit(
+    role,
+    permissions,
+    isWaitingChannel ? 'Accès exclusif des membres en attente' : 'Masquage pour les membres non vérifiés',
+  );
+}
+
+async function enforceWaitingRolePermissions(guild) {
+  const role = await guild.roles.fetch(config.waitingRoleId).catch(() => null);
+  if (!role) throw new Error(`Rôle d’attente ${config.waitingRoleId} introuvable.`);
+  await guild.channels.fetch();
+  for (const channel of guild.channels.cache.values()) {
+    await configureWaitingRoleChannel(channel, role);
+  }
+}
+
 async function openVerificationThread(interaction, member) {
   const record = state.verifications[member.id] || {};
   let thread = record.threadId
     ? await interaction.guild.channels.fetch(record.threadId).catch(() => null)
     : null;
   if (!thread?.isThread()) {
-    if (!interaction.channel?.threads) throw new Error('Le salon de vérification ne permet pas les fils privés.');
-    thread = await interaction.channel.threads.create({
+    const waitingChannel = await interaction.guild.channels.fetch(config.waitingChannelId).catch(() => null);
+    if (!waitingChannel?.threads) throw new Error('Le salon d’attente ne permet pas les fils privés.');
+    thread = await waitingChannel.threads.create({
       name: `verification-${member.user.username}`.toLowerCase().replace(/[^a-z0-9-_]/g, '-').slice(0, 90),
       type: ChannelType.PrivateThread,
       invitable: false,
@@ -444,7 +472,18 @@ client.once(Events.ClientReady, async (readyClient) => {
   if (!waitingRole) console.error(`Rôle d’attente introuvable : ${config.waitingRoleId}`);
   if (!waitingChannel?.isTextBased()) console.error(`Salon d’attente introuvable : ${config.waitingChannelId}`);
   if (!verificationChannel?.isTextBased()) console.error(`Salon de vérification introuvable : ${config.verificationChannelId}`);
+  await enforceWaitingRolePermissions(guild).catch((error) => {
+    console.error('Configuration des permissions du rôle d’attente impossible :', error);
+  });
   console.log(`Welcomebot connecté : ${readyClient.user.tag} · accueil ${config.enabled ? 'activé' : 'désactivé'}`);
+});
+
+client.on(Events.ChannelCreate, async (channel) => {
+  const role = await channel.guild.roles.fetch(config.waitingRoleId).catch(() => null);
+  if (!role) return;
+  await configureWaitingRoleChannel(channel, role).catch((error) => {
+    console.error(`Protection du nouveau salon ${channel.id} impossible :`, error);
+  });
 });
 
 client.on(Events.GuildMemberAdd, async (member) => {
