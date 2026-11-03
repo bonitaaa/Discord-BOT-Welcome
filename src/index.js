@@ -396,7 +396,7 @@ function verificationPanel(member, status = 'pending', moderator = null) {
     );
   } else if (rejected) {
     container.addTextDisplayComponents(
-      new TextDisplayBuilder().setContent('-# Toute nouvelle tentative de retour sera expulsée automatiquement, puis bannie à la troisième récidive.'),
+      new TextDisplayBuilder().setContent('-# Le membre peut revenir et demander une nouvelle vérification. Les retours répétés servant à forcer entraînent un bannissement.'),
     );
   }
   return { components: [container], flags: MessageFlags.IsComponentsV2 };
@@ -420,6 +420,7 @@ async function beginVerification(member) {
   if (!verificationChannel?.isTextBased()) throw new Error(`Salon de vérification ${config.verificationChannelId} introuvable.`);
   const message = await verificationChannel.send(verificationPanel(member));
   state.verifications[member.id] = {
+    ...(state.verifications[member.id] || {}),
     status: 'pending',
     messageId: message.id,
     threadId: null,
@@ -430,10 +431,12 @@ async function beginVerification(member) {
 
 async function handleRejectedRejoin(member) {
   const record = state.verifications[member.id];
-  if (record?.status !== 'rejected') return false;
-  const attempts = (record.rejectedAttempts || 0) + 1;
-  record.rejectedAttempts = attempts;
+  if (!record || (!record.everRejected && record.status !== 'rejected') || record.status === 'accepted') return false;
+  record.everRejected = true;
+  const attempts = (record.forcedRejoinAttempts || 0) + 1;
+  record.forcedRejoinAttempts = attempts;
   record.lastRejectedRejoinAt = Date.now();
+  record.status = attempts >= 3 ? 'banned' : 'pending';
   saveState();
 
   const banned = attempts >= 3;
@@ -447,7 +450,7 @@ async function handleRejectedRejoin(member) {
           `## ${member.user.username}`,
           `**Membre** — ${member} · ID ${member.id}`,
           `**Tentative après refus** — ${attempts}/3`,
-          `**Réponse** — ${banned ? 'bannissement définitif' : 'expulsion automatique'}`,
+          `**Réponse** — ${banned ? 'bannissement définitif' : 'nouvelle vérification autorisée'}`,
           `**Date** — <t:${Math.floor(Date.now() / 1000)}:F>`,
         ].join('\n')),
       );
@@ -458,9 +461,11 @@ async function handleRejectedRejoin(member) {
     }).catch(() => {});
   }
 
-  if (banned) await member.ban({ reason: 'Troisième tentative de retour après un refus de vérification' });
-  else await member.kick(`Retour ${attempts}/3 après un refus de vérification`);
-  return true;
+  if (banned) {
+    await member.ban({ reason: 'Troisième retour forcé après un refus de vérification' });
+    return true;
+  }
+  return false;
 }
 
 async function configureWaitingRoleChannel(channel, role) {
@@ -726,7 +731,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
           status: 'rejected',
           rejectedBy: interaction.user.id,
           rejectedAt: Date.now(),
-          rejectedAttempts: 0,
+          everRejected: true,
+          forcedRejoinAttempts: record.forcedRejoinAttempts || 0,
         };
         saveState();
         await interaction.update(verificationPanel(member, 'rejected', moderator));
