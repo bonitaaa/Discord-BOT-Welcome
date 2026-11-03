@@ -30,6 +30,9 @@ const config = {
   personalRoleChannelId: process.env.PERSONAL_ROLE_CHANNEL_ID || '1566461084712312852',
   personalVoiceChannelId: process.env.PERSONAL_VOICE_CHANNEL_ID || '1565752911433302096',
   supportChannelId: process.env.SUPPORT_CHANNEL_ID || '1563907534119633019',
+  waitingRoleId: process.env.WAITING_ROLE_ID || '1567273149739966504',
+  waitingChannelId: process.env.WAITING_CHANNEL_ID || '1567273450085687338',
+  verificationChannelId: process.env.VERIFICATION_CHANNEL_ID || '1567273469270564966',
   dataFile: process.env.DATA_FILE || path.join(process.env.DATA_DIR || path.join(process.cwd(), 'data'), 'welcome-state.json'),
 };
 
@@ -37,7 +40,7 @@ if (!config.token || !config.guildId) {
   throw new Error('DISCORD_TOKEN et GUILD_ID sont obligatoires.');
 }
 
-const emptyState = () => ({ config: {}, profiles: {}, sessions: {} });
+const emptyState = () => ({ config: {}, profiles: {}, sessions: {}, verifications: {} });
 
 function loadState() {
   try {
@@ -49,6 +52,7 @@ function loadState() {
         completed: Array.isArray(profile.completed) ? profile.completed.filter((value) => typeof value === 'string') : [],
       }])),
       sessions: parsed.sessions || {},
+      verifications: parsed.verifications || {},
     };
   } catch (error) {
     if (error.code !== 'ENOENT') console.error('Lecture de la sauvegarde impossible :', error);
@@ -317,6 +321,103 @@ function canConfigure(userId) {
   return config.owners.has(userId);
 }
 
+function canVerify(member) {
+  return config.owners.has(member.id)
+    || member.permissions.has(PermissionFlagsBits.Administrator)
+    || member.permissions.has(PermissionFlagsBits.ManageGuild)
+    || member.permissions.has(PermissionFlagsBits.ModerateMembers);
+}
+
+function verificationPanel(member, status = 'pending', moderator = null) {
+  const accepted = status === 'accepted';
+  const container = new ContainerBuilder()
+    .setAccentColor(accepted ? 0x22c55e : 0xf59e0b)
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent([
+        `-# PVCool · Vérification ${accepted ? 'terminée' : 'en attente'}`,
+        `## ${accepted ? '✅ Membre accepté' : '🕓 Nouvelle arrivée à vérifier'}`,
+        `**Membre** — ${member} (${member.id})`,
+        `**Compte créé** — <t:${Math.floor(member.user.createdTimestamp / 1000)}:R>`,
+        `**Arrivée** — <t:${Math.floor((member.joinedTimestamp || Date.now()) / 1000)}:R>`,
+        ...(moderator ? [`**Traité par** — ${moderator}`] : []),
+      ].join('\n')),
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small));
+
+  if (!accepted) {
+    container.addActionRowComponents(
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`verification:accept:${member.id}`)
+          .setLabel('Accepter')
+          .setEmoji('✅')
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+          .setCustomId(`verification:thread:${member.id}`)
+          .setLabel('Ouvrir un fil privé')
+          .setEmoji('💬')
+          .setStyle(ButtonStyle.Secondary),
+      ),
+    );
+  }
+  return { components: [container], flags: MessageFlags.IsComponentsV2 };
+}
+
+async function beginVerification(member) {
+  const role = await member.guild.roles.fetch(config.waitingRoleId).catch(() => null);
+  if (!role) throw new Error(`Rôle d’attente ${config.waitingRoleId} introuvable.`);
+  if (!role.editable) throw new Error(`Le rôle d’attente ${role.name} doit être placé sous Welcomebot.`);
+  await member.roles.add(role, 'Mise en attente automatique à l’arrivée');
+
+  const waitingChannel = await member.guild.channels.fetch(config.waitingChannelId).catch(() => null);
+  if (waitingChannel?.isTextBased()) {
+    await waitingChannel.send({
+      content: `${member}, bienvenue ! Ton compte est en attente de vérification par l’équipe. Tu recevras l’accès au serveur dès ton acceptation.`,
+      allowedMentions: { users: [member.id] },
+    });
+  }
+
+  const verificationChannel = await member.guild.channels.fetch(config.verificationChannelId).catch(() => null);
+  if (!verificationChannel?.isTextBased()) throw new Error(`Salon de vérification ${config.verificationChannelId} introuvable.`);
+  const message = await verificationChannel.send(verificationPanel(member));
+  state.verifications[member.id] = {
+    status: 'pending',
+    messageId: message.id,
+    threadId: null,
+    createdAt: Date.now(),
+  };
+  saveState();
+}
+
+async function openVerificationThread(interaction, member) {
+  const record = state.verifications[member.id] || {};
+  let thread = record.threadId
+    ? await interaction.guild.channels.fetch(record.threadId).catch(() => null)
+    : null;
+  if (!thread?.isThread()) {
+    if (!interaction.channel?.threads) throw new Error('Le salon de vérification ne permet pas les fils privés.');
+    thread = await interaction.channel.threads.create({
+      name: `verification-${member.user.username}`.toLowerCase().replace(/[^a-z0-9-_]/g, '-').slice(0, 90),
+      type: ChannelType.PrivateThread,
+      invitable: false,
+      reason: `Vérification privée de ${member.user.tag}`,
+    });
+    await thread.members.add(member.id);
+    await thread.members.add(interaction.user.id).catch(() => {});
+    await thread.send({
+      content: `${member}, ce fil est privé. Tu peux répondre ici aux questions de l’équipe de modération.`,
+      allowedMentions: { users: [member.id] },
+    });
+    state.verifications[member.id] = { ...record, status: record.status || 'pending', threadId: thread.id };
+    saveState();
+  } else {
+    await thread.setArchived(false).catch(() => {});
+    await thread.members.add(member.id).catch(() => {});
+    await thread.members.add(interaction.user.id).catch(() => {});
+  }
+  return thread;
+}
+
 const commands = [
   new SlashCommandBuilder()
     .setName('welcome-config')
@@ -334,13 +435,22 @@ client.once(Events.ClientReady, async (readyClient) => {
   const applicationId = config.clientId || readyClient.application?.id || readyClient.user.id;
   await rest.put(Routes.applicationGuildCommands(applicationId, config.guildId), { body: commands });
   await readyClient.user.setPresence({ status: 'invisible', activities: [] });
+  const guild = await readyClient.guilds.fetch(config.guildId);
+  const [waitingRole, waitingChannel, verificationChannel] = await Promise.all([
+    guild.roles.fetch(config.waitingRoleId).catch(() => null),
+    guild.channels.fetch(config.waitingChannelId).catch(() => null),
+    guild.channels.fetch(config.verificationChannelId).catch(() => null),
+  ]);
+  if (!waitingRole) console.error(`Rôle d’attente introuvable : ${config.waitingRoleId}`);
+  if (!waitingChannel?.isTextBased()) console.error(`Salon d’attente introuvable : ${config.waitingChannelId}`);
+  if (!verificationChannel?.isTextBased()) console.error(`Salon de vérification introuvable : ${config.verificationChannelId}`);
   console.log(`Welcomebot connecté : ${readyClient.user.tag} · accueil ${config.enabled ? 'activé' : 'désactivé'}`);
 });
 
 client.on(Events.GuildMemberAdd, async (member) => {
   if (!config.enabled || member.user.bot) return;
   try {
-    await createWelcomeThread(member);
+    await beginVerification(member);
   } catch (error) {
     console.error(`Accueil impossible pour ${member.user.tag}:`, error);
   }
@@ -348,6 +458,56 @@ client.on(Events.GuildMemberAdd, async (member) => {
 
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
+    if (interaction.isButton() && interaction.customId.startsWith('verification:')) {
+      const moderator = await interaction.guild.members.fetch(interaction.user.id);
+      if (!canVerify(moderator)) {
+        return interaction.reply({ content: 'Action réservée à l’équipe de modération.', ephemeral: true });
+      }
+      const [, action, memberId] = interaction.customId.split(':');
+      const member = await interaction.guild.members.fetch(memberId).catch(() => null);
+      if (!member) return interaction.reply({ content: 'Ce membre a quitté le serveur.', ephemeral: true });
+      const record = state.verifications[member.id] || {};
+
+      if (action === 'thread') {
+        await interaction.deferReply({ ephemeral: true });
+        const thread = await openVerificationThread(interaction, member);
+        return interaction.editReply(`Fil privé ouvert : ${thread}`);
+      }
+
+      if (action === 'accept') {
+        if (record.status === 'accepted') {
+          return interaction.reply({ content: 'Ce membre a déjà été accepté.', ephemeral: true });
+        }
+        const waitingRole = await interaction.guild.roles.fetch(config.waitingRoleId).catch(() => null);
+        if (waitingRole && member.roles.cache.has(waitingRole.id)) {
+          await member.roles.remove(waitingRole, `Vérification acceptée par ${interaction.user.tag}`);
+        }
+        state.verifications[member.id] = {
+          ...record,
+          status: 'accepted',
+          acceptedBy: interaction.user.id,
+          acceptedAt: Date.now(),
+        };
+        saveState();
+        await interaction.update(verificationPanel(member, 'accepted', moderator));
+        if (record.threadId) {
+          const thread = await interaction.guild.channels.fetch(record.threadId).catch(() => null);
+          if (thread?.isThread()) {
+            await thread.send({ content: `✅ Vérification acceptée par ${moderator}. Bienvenue sur le serveur !` }).catch(() => {});
+            await thread.setArchived(true, 'Vérification acceptée').catch(() => {});
+          }
+        }
+        const waitingChannel = await interaction.guild.channels.fetch(config.waitingChannelId).catch(() => null);
+        if (waitingChannel?.isTextBased()) {
+          await waitingChannel.send({
+            content: `✅ ${member}, ta vérification est acceptée. Tu as maintenant accès au serveur.`,
+            allowedMentions: { users: [member.id] },
+          }).catch(() => {});
+        }
+        return;
+      }
+    }
+
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === 'welcome-config') {
         if (!canConfigure(interaction.user.id)) return interaction.reply({ content: 'Commande réservée aux propriétaires.', ephemeral: true });
