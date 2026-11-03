@@ -13,8 +13,10 @@ const {
   Routes,
   SeparatorBuilder,
   SeparatorSpacingSize,
+  SectionBuilder,
   SlashCommandBuilder,
   TextDisplayBuilder,
+  ThumbnailBuilder,
 } = require('discord.js');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -337,21 +339,39 @@ function canVerify(member) {
 
 function verificationPanel(member, status = 'pending', moderator = null) {
   const accepted = status === 'accepted';
-  const container = new ContainerBuilder()
-    .setAccentColor(accepted ? 0x22c55e : 0xf59e0b)
+  const rejected = status === 'rejected';
+  const presentation = accepted
+    ? { color: 0x22c55e, eyebrow: 'VÉRIFICATION TERMINÉE', title: '✅ Membre accepté' }
+    : (rejected
+      ? { color: 0xed4245, eyebrow: 'VÉRIFICATION REFUSÉE', title: '⛔ Membre expulsé' }
+      : { color: 0xf59e0b, eyebrow: 'VÉRIFICATION EN ATTENTE', title: '🕓 Nouvelle arrivée' });
+  const details = new SectionBuilder()
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent([
-        `-# PVCool · Vérification ${accepted ? 'terminée' : 'en attente'}`,
-        `## ${accepted ? '✅ Membre accepté' : '🕓 Nouvelle arrivée à vérifier'}`,
-        `**Membre** — ${member} (${member.id})`,
-        `**Compte créé** — <t:${Math.floor(member.user.createdTimestamp / 1000)}:R>`,
+        `## ${presentation.title}`,
+        `**Membre** — ${member}`,
+        `-# Identifiant : ${member.id}`,
+        '',
+        `**Compte créé** — <t:${Math.floor(member.user.createdTimestamp / 1000)}:F>`,
+        `**Ancienneté** — <t:${Math.floor(member.user.createdTimestamp / 1000)}:R>`,
         `**Arrivée** — <t:${Math.floor((member.joinedTimestamp || Date.now()) / 1000)}:R>`,
         ...(moderator ? [`**Traité par** — ${moderator}`] : []),
       ].join('\n')),
     )
+    .setThumbnailAccessory(
+      new ThumbnailBuilder()
+        .setURL(member.displayAvatarURL({ size: 256 }))
+        .setDescription(`Avatar de ${member.user.username}`),
+    );
+  const container = new ContainerBuilder()
+    .setAccentColor(presentation.color)
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`-# PVCool · ${presentation.eyebrow}`),
+    )
+    .addSectionComponents(details)
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small));
 
-  if (!accepted) {
+  if (!accepted && !rejected) {
     container.addActionRowComponents(
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -360,11 +380,23 @@ function verificationPanel(member, status = 'pending', moderator = null) {
           .setEmoji('✅')
           .setStyle(ButtonStyle.Success),
         new ButtonBuilder()
+          .setCustomId(`verification:reject:${member.id}`)
+          .setLabel('Refuser')
+          .setEmoji('⛔')
+          .setStyle(ButtonStyle.Danger),
+        new ButtonBuilder()
           .setCustomId(`verification:thread:${member.id}`)
           .setLabel('Ouvrir un fil privé')
           .setEmoji('💬')
           .setStyle(ButtonStyle.Secondary),
       ),
+    );
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent('-# Accepter retire le rôle d’attente · Refuser expulse le membre · Le fil permet un échange privé.'),
+    );
+  } else if (rejected) {
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent('-# Toute nouvelle tentative de retour sera expulsée automatiquement, puis bannie à la troisième récidive.'),
     );
   }
   return { components: [container], flags: MessageFlags.IsComponentsV2 };
@@ -394,6 +426,41 @@ async function beginVerification(member) {
     createdAt: Date.now(),
   };
   saveState();
+}
+
+async function handleRejectedRejoin(member) {
+  const record = state.verifications[member.id];
+  if (record?.status !== 'rejected') return false;
+  const attempts = (record.rejectedAttempts || 0) + 1;
+  record.rejectedAttempts = attempts;
+  record.lastRejectedRejoinAt = Date.now();
+  saveState();
+
+  const banned = attempts >= 3;
+  const verificationChannel = await member.guild.channels.fetch(config.verificationChannelId).catch(() => null);
+  if (verificationChannel?.isTextBased()) {
+    const container = new ContainerBuilder()
+      .setAccentColor(banned ? 0x7f1d1d : 0xed4245)
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent([
+          `-# ${banned ? '🔨 BANNISSEMENT AUTOMATIQUE' : '⛔ RETOUR APRÈS REFUS'}`,
+          `## ${member.user.username}`,
+          `**Membre** — ${member} · ID ${member.id}`,
+          `**Tentative après refus** — ${attempts}/3`,
+          `**Réponse** — ${banned ? 'bannissement définitif' : 'expulsion automatique'}`,
+          `**Date** — <t:${Math.floor(Date.now() / 1000)}:F>`,
+        ].join('\n')),
+      );
+    await verificationChannel.send({
+      components: [container],
+      flags: MessageFlags.IsComponentsV2,
+      allowedMentions: { parse: [] },
+    }).catch(() => {});
+  }
+
+  if (banned) await member.ban({ reason: 'Troisième tentative de retour après un refus de vérification' });
+  else await member.kick(`Retour ${attempts}/3 après un refus de vérification`);
+  return true;
 }
 
 async function configureWaitingRoleChannel(channel, role) {
@@ -585,6 +652,7 @@ client.on(Events.GuildRoleDelete, async (role) => {
 client.on(Events.GuildMemberAdd, async (member) => {
   if (!config.enabled || member.user.bot) return;
   try {
+    if (await handleRejectedRejoin(member)) return;
     await beginVerification(member);
   } catch (error) {
     console.error(`Accueil impossible pour ${member.user.tag}:`, error);
@@ -645,6 +713,36 @@ client.on(Events.InteractionCreate, async (interaction) => {
           channelId: config.verifiedWelcomeChannelId,
         }).catch((error) => {
           console.error(`Création du fil d’accueil après vérification impossible pour ${member.user.tag} :`, error);
+        });
+        return;
+      }
+
+      if (action === 'reject') {
+        if (record.status === 'rejected') {
+          return interaction.reply({ content: 'Ce membre a déjà été refusé.', ephemeral: true });
+        }
+        state.verifications[member.id] = {
+          ...record,
+          status: 'rejected',
+          rejectedBy: interaction.user.id,
+          rejectedAt: Date.now(),
+          rejectedAttempts: 0,
+        };
+        saveState();
+        await interaction.update(verificationPanel(member, 'rejected', moderator));
+        if (record.threadId) {
+          const thread = await interaction.guild.channels.fetch(record.threadId).catch(() => null);
+          if (thread?.isThread()) {
+            await thread.send({ content: `⛔ Vérification refusée par ${moderator}.` }).catch(() => {});
+            await thread.setArchived(true, 'Vérification refusée').catch(() => {});
+          }
+        }
+        await member.kick(`Vérification refusée par ${interaction.user.tag}`).catch(async (error) => {
+          console.error(`Expulsion de ${member.user.tag} impossible :`, error);
+          await interaction.followUp({
+            content: 'Le refus est enregistré, mais l’expulsion a échoué. Vérifie la hiérarchie du bot.',
+            ephemeral: true,
+          }).catch(() => {});
         });
         return;
       }
