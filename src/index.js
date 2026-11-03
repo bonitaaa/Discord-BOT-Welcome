@@ -412,6 +412,9 @@ async function configureWaitingRoleChannel(channel, role) {
 async function enforceWaitingRolePermissions(guild) {
   const role = await guild.roles.fetch(config.waitingRoleId).catch(() => null);
   if (!role) throw new Error(`Rôle d’attente ${config.waitingRoleId} introuvable.`);
+  if (role.permissions.bitfield !== 0n) {
+    await role.setPermissions(0n, 'Le rôle non vérifié ne doit posséder aucune permission générale');
+  }
   await guild.channels.fetch();
   for (const channel of guild.channels.cache.values()) {
     await configureWaitingRoleChannel(channel, role);
