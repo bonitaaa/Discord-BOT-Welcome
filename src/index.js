@@ -13,10 +13,8 @@ const {
   Routes,
   SeparatorBuilder,
   SeparatorSpacingSize,
-  SectionBuilder,
   SlashCommandBuilder,
   TextDisplayBuilder,
-  ThumbnailBuilder,
 } = require('discord.js');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -65,6 +63,11 @@ function loadState() {
 
 let state = loadState();
 const authorizedWaitingRoleRemovals = new Set();
+const VERIFICATION_MODERATOR_ROLE_IDS = new Set([
+  '1565034303560355870',
+  '1564636235333505126',
+  '1565392656970817568',
+]);
 
 function waitingRoleId() {
   return state.config.waitingRoleId || config.waitingRoleId;
@@ -332,9 +335,7 @@ function canConfigure(userId) {
 
 function canVerify(member) {
   return config.owners.has(member.id)
-    || member.permissions.has(PermissionFlagsBits.Administrator)
-    || member.permissions.has(PermissionFlagsBits.ManageGuild)
-    || member.permissions.has(PermissionFlagsBits.ModerateMembers);
+    || [...VERIFICATION_MODERATOR_ROLE_IDS].some((roleId) => member.roles.cache.has(roleId));
 }
 
 function verificationPanel(member, status = 'pending', moderator = null) {
@@ -345,34 +346,27 @@ function verificationPanel(member, status = 'pending', moderator = null) {
     : (rejected
       ? { color: 0xed4245, eyebrow: 'VÉRIFICATION REFUSÉE', title: '⛔ Membre expulsé' }
       : { color: 0xf59e0b, eyebrow: 'VÉRIFICATION EN ATTENTE', title: '🕓 Nouvelle arrivée' });
-  const details = new SectionBuilder()
-    .addTextDisplayComponents(
-      new TextDisplayBuilder().setContent([
-        `## ${presentation.title}`,
-        `**Membre** — ${member}`,
-        `-# Identifiant : ${member.id}`,
-        '',
-        `**Compte créé** — <t:${Math.floor(member.user.createdTimestamp / 1000)}:F>`,
-        `**Ancienneté** — <t:${Math.floor(member.user.createdTimestamp / 1000)}:R>`,
-        `**Arrivée** — <t:${Math.floor((member.joinedTimestamp || Date.now()) / 1000)}:R>`,
-        ...(moderator ? [`**Traité par** — ${moderator}`] : []),
-      ].join('\n')),
-    )
-    .setThumbnailAccessory(
-      new ThumbnailBuilder()
-        .setURL(member.displayAvatarURL({ size: 256 }))
-        .setDescription(`Avatar de ${member.user.username}`),
-    );
-  const container = new ContainerBuilder()
-    .setAccentColor(presentation.color)
-    .addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(`-# PVCool · ${presentation.eyebrow}`),
-    )
-    .addSectionComponents(details)
-    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small));
+  const content = [
+    ...(!accepted && !rejected ? [[...VERIFICATION_MODERATOR_ROLE_IDS].map((roleId) => `<@&${roleId}>`).join(' ')] : []),
+    `**PVCool · ${presentation.eyebrow}**`,
+    `## ${presentation.title}`,
+    `**Membre** — ${member}`,
+    `**Identifiant** — \`${member.id}\``,
+    `**Compte créé** — <t:${Math.floor(member.user.createdTimestamp / 1000)}:F>`,
+    `**Ancienneté** — <t:${Math.floor(member.user.createdTimestamp / 1000)}:R>`,
+    `**Arrivée** — <t:${Math.floor((member.joinedTimestamp || Date.now()) / 1000)}:R>`,
+    ...(moderator ? [`**Traité par** — ${moderator}`] : []),
+    '',
+    rejected
+      ? 'Le membre peut revenir et demander une nouvelle vérification. Les retours répétés servant à forcer entraînent un bannissement.'
+      : (accepted
+        ? 'Le rôle d’attente a été retiré et le parcours d’accueil a été lancé.'
+        : 'Accepter retire le rôle d’attente · Refuser expulse le membre · Le fil permet un échange privé.'),
+  ].join('\n');
 
+  const components = [];
   if (!accepted && !rejected) {
-    container.addActionRowComponents(
+    components.push(
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId(`verification:accept:${member.id}`)
@@ -391,15 +385,8 @@ function verificationPanel(member, status = 'pending', moderator = null) {
           .setStyle(ButtonStyle.Secondary),
       ),
     );
-    container.addTextDisplayComponents(
-      new TextDisplayBuilder().setContent('-# Accepter retire le rôle d’attente · Refuser expulse le membre · Le fil permet un échange privé.'),
-    );
-  } else if (rejected) {
-    container.addTextDisplayComponents(
-      new TextDisplayBuilder().setContent('-# Le membre peut revenir et demander une nouvelle vérification. Les retours répétés servant à forcer entraînent un bannissement.'),
-    );
   }
-  return { components: [container], flags: MessageFlags.IsComponentsV2 };
+  return { content, components };
 }
 
 async function beginVerification(member) {
@@ -418,7 +405,13 @@ async function beginVerification(member) {
 
   const verificationChannel = await member.guild.channels.fetch(config.verificationChannelId).catch(() => null);
   if (!verificationChannel?.isTextBased()) throw new Error(`Salon de vérification ${config.verificationChannelId} introuvable.`);
-  const message = await verificationChannel.send(verificationPanel(member));
+  const message = await verificationChannel.send({
+    ...verificationPanel(member),
+    allowedMentions: {
+      roles: [...VERIFICATION_MODERATOR_ROLE_IDS],
+      users: [member.id],
+    },
+  });
   state.verifications[member.id] = {
     ...(state.verifications[member.id] || {}),
     status: 'pending',
@@ -442,22 +435,16 @@ async function handleRejectedRejoin(member) {
   const banned = attempts >= 3;
   const verificationChannel = await member.guild.channels.fetch(config.verificationChannelId).catch(() => null);
   if (verificationChannel?.isTextBased()) {
-    const container = new ContainerBuilder()
-      .setAccentColor(banned ? 0x7f1d1d : 0xed4245)
-      .addTextDisplayComponents(
-        new TextDisplayBuilder().setContent([
-          `-# ${banned ? '🔨 BANNISSEMENT AUTOMATIQUE' : '⛔ RETOUR APRÈS REFUS'}`,
-          `## ${member.user.username}`,
-          `**Membre** — ${member} · ID ${member.id}`,
-          `**Tentative après refus** — ${attempts}/3`,
-          `**Réponse** — ${banned ? 'bannissement définitif' : 'nouvelle vérification autorisée'}`,
-          `**Date** — <t:${Math.floor(Date.now() / 1000)}:F>`,
-        ].join('\n')),
-      );
     await verificationChannel.send({
-      components: [container],
-      flags: MessageFlags.IsComponentsV2,
-      allowedMentions: { parse: [] },
+      content: [
+        `**${banned ? '🔨 BANNISSEMENT AUTOMATIQUE' : '⛔ RETOUR APRÈS REFUS'}**`,
+        `## ${member.user.username}`,
+        `**Membre** — ${member} · ID \`${member.id}\``,
+        `**Tentative après refus** — ${attempts}/3`,
+        `**Réponse** — ${banned ? 'bannissement définitif' : 'nouvelle vérification autorisée'}`,
+        `**Date** — <t:${Math.floor(Date.now() / 1000)}:F>`,
+      ].join('\n'),
+      allowedMentions: { users: [member.id] },
     }).catch(() => {});
   }
 
