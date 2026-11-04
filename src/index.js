@@ -17,6 +17,7 @@ const {
   SlashCommandBuilder,
   TextDisplayBuilder,
   ThumbnailBuilder,
+  UserSelectMenuBuilder,
 } = require('discord.js');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -36,6 +37,7 @@ const config = {
   waitingChannelId: process.env.WAITING_CHANNEL_ID || '1567273450085687338',
   verificationChannelId: process.env.VERIFICATION_CHANNEL_ID || '1567273469270564966',
   verifiedWelcomeChannelId: process.env.VERIFIED_WELCOME_CHANNEL_ID || '1563618087255941381',
+  candySyncChannelId: process.env.CANDY_SYNC_CHANNEL_ID || '1565775071489040394',
   dataFile: process.env.DATA_FILE || path.join(process.env.DATA_DIR || path.join(process.cwd(), 'data'), 'welcome-state.json'),
 };
 
@@ -53,6 +55,7 @@ function loadState() {
       profiles: Object.fromEntries(Object.entries(parsed.profiles || {}).map(([id, profile]) => [id, {
         language: profile.language === 'en' ? 'en' : profile.language === 'fr' ? 'fr' : null,
         completed: Array.isArray(profile.completed) ? profile.completed.filter((value) => typeof value === 'string') : [],
+        sponsoredUserId: typeof profile.sponsoredUserId === 'string' ? profile.sponsoredUserId : null,
       }])),
       sessions: parsed.sessions || {},
       verifications: parsed.verifications || {},
@@ -204,7 +207,8 @@ const tutorial = [
 ];
 
 function profileFor(userId) {
-  if (!state.profiles[userId]) state.profiles[userId] = { language: null, completed: [] };
+  if (!state.profiles[userId]) state.profiles[userId] = { language: null, completed: [], sponsoredUserId: null };
+  state.profiles[userId].sponsoredUserId ??= null;
   return state.profiles[userId];
 }
 
@@ -239,10 +243,33 @@ function panel(profile, member) {
 
   const step = currentStep(profile);
   if (!step) {
+    if (!profile.sponsoredUserId) {
+      container.setAccentColor(0x38bdf8);
+      container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(
+          language === 'fr'
+            ? '-# Dernière étape · PVCool\n## 🤝 Parraine un membre\nChoisis une personne du serveur à parrainer. Elle recevra **300 flocons ❄️**.'
+            : '-# Final step · PVCool\n## 🤝 Sponsor a member\nChoose a server member to sponsor. They will receive **300 snowflakes ❄️**.',
+        ),
+      );
+      container.addSeparatorComponents(
+        new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small),
+      );
+      container.addActionRowComponents(
+        new ActionRowBuilder().addComponents(
+          new UserSelectMenuBuilder()
+            .setCustomId('welcome:sponsor')
+            .setPlaceholder(language === 'fr' ? 'Choisir le membre à parrainer' : 'Choose a member to sponsor')
+            .setMinValues(1)
+            .setMaxValues(1),
+        ),
+      );
+      return { components: [container] };
+    }
     container.setAccentColor(0x22c55e);
     container.addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
-        `-# PVCool · Parcours terminé\n## ✅ ${text.doneTitle}\n${text.done}`,
+        `-# PVCool · Parcours terminé\n## ✅ ${text.doneTitle}\n${text.done}\n\n❄️ <@${profile.sponsoredUserId}> a reçu **300 flocons** grâce à ton parrainage.`,
       ),
     );
     return { components: [container] };
@@ -277,7 +304,7 @@ async function findWelcomeChannel(guild, channelId = null) {
 async function createWelcomeThread(member, { forceReset = false, channelId = null } = {}) {
   const channel = await findWelcomeChannel(member.guild, channelId);
   if (!channel?.threads) throw new Error('Le salon d’accueil configuré ne permet pas de créer des fils.');
-  if (forceReset) state.profiles[member.id] = { language: null, completed: [] };
+  if (forceReset) state.profiles[member.id] = { language: null, completed: [], sponsoredUserId: null };
   const profile = profileFor(member.id);
   const previous = state.sessions[member.id];
   let thread = previous?.threadId ? await member.guild.channels.fetch(previous.threadId).catch(() => null) : null;
@@ -329,6 +356,17 @@ async function updateWelcomePanel(interaction, profile, member) {
   };
   saveState();
   return replacement;
+}
+
+async function requestSponsorshipReward(guild, newcomerId, sponsoredUserId) {
+  const channel = await guild.channels.fetch(config.candySyncChannelId).catch(() => null);
+  if (!channel?.isTextBased() || !('send' in channel)) {
+    throw new Error(`Salon de synchronisation des flocons ${config.candySyncChannelId} introuvable.`);
+  }
+  return channel.send({
+    content: `Welcomebot sponsorship reward v1:${newcomerId}:${sponsoredUserId}:300`,
+    allowedMentions: { parse: [] },
+  });
 }
 
 function canConfigure(userId) {
@@ -790,7 +828,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
     }
 
-    if (!interaction.isButton() || !interaction.customId.startsWith('welcome:')) return;
+    const isWelcomeButton = interaction.isButton() && interaction.customId.startsWith('welcome:');
+    const isSponsorSelect = interaction.isUserSelectMenu() && interaction.customId === 'welcome:sponsor';
+    if (!isWelcomeButton && !isSponsorSelect) return;
     const profile = profileFor(interaction.user.id);
     const session = state.sessions[interaction.user.id];
     const language = profile.language || 'fr';
@@ -799,6 +839,33 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     const member = await interaction.guild.members.fetch(interaction.user.id);
+    if (isSponsorSelect) {
+      if (currentStep(profile)) {
+        return interaction.reply({ content: copy[language].expired, ephemeral: true });
+      }
+      if (profile.sponsoredUserId) {
+        return interaction.reply({ content: 'Ton parrainage a déjà été enregistré.', ephemeral: true });
+      }
+      const sponsoredUserId = interaction.values[0];
+      const sponsoredMember = await interaction.guild.members.fetch(sponsoredUserId).catch(() => null);
+      if (!sponsoredMember || sponsoredMember.user.bot) {
+        return interaction.reply({ content: 'Choisis un membre humain présent sur le serveur.', ephemeral: true });
+      }
+      if (sponsoredMember.id === interaction.user.id) {
+        return interaction.reply({ content: 'Tu ne peux pas te parrainer toi-même.', ephemeral: true });
+      }
+      await interaction.deferUpdate();
+      await requestSponsorshipReward(interaction.guild, interaction.user.id, sponsoredMember.id);
+      profile.sponsoredUserId = sponsoredMember.id;
+      saveState();
+      const payload = { ...panel(profile, member), allowedMentions: { parse: [] } };
+      await interaction.message.edit(payload);
+      setTimeout(async () => {
+        const thread = await interaction.guild.channels.fetch(session.threadId).catch(() => null);
+        if (thread?.isThread()) await thread.setArchived(true, 'Parcours de bienvenue et parrainage terminés').catch(() => {});
+      }, 60_000);
+      return;
+    }
     const [, kind, first, second] = interaction.customId.split(':');
     if (kind === 'language') {
       profile.language = first === 'en' ? 'en' : 'fr';
@@ -815,12 +882,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       profile.completed.push(step.id);
       saveState();
       await updateWelcomePanel(interaction, profile, member);
-      if (!currentStep(profile)) {
-        setTimeout(async () => {
-          const thread = await interaction.guild.channels.fetch(session.threadId).catch(() => null);
-          if (thread?.isThread()) await thread.setArchived(true, 'Parcours de bienvenue terminé').catch(() => {});
-        }, 60_000);
-      }
     }
   } catch (error) {
     console.error('Interaction Welcomebot impossible :', error);
