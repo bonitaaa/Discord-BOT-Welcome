@@ -476,11 +476,16 @@ async function beginVerification(member) {
     },
   });
   state.verifications[member.id] = {
-    ...(state.verifications[member.id] || {}),
+    everRejected: state.verifications[member.id]?.everRejected || false,
+    forcedRejoinAttempts: state.verifications[member.id]?.forcedRejoinAttempts || 0,
     status: 'pending',
     messageId: message.id,
     threadId: null,
     createdAt: Date.now(),
+    acceptedBy: null,
+    acceptedAt: null,
+    rejectedBy: null,
+    rejectedAt: null,
   };
   saveState();
 }
@@ -734,7 +739,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (action === 'accept') {
         if (record.status === 'accepted') {
-          return interaction.reply({ content: 'Ce membre a déjà été accepté.', ephemeral: true });
+          const originalModerator = record.acceptedBy
+            ? await interaction.guild.members.fetch(record.acceptedBy).catch(() => moderator)
+            : moderator;
+          return interaction.update(verificationPanel(member, 'accepted', originalModerator));
         }
         const waitingRole = await interaction.guild.roles.fetch(waitingRoleId()).catch(() => null);
         if (waitingRole && member.roles.cache.has(waitingRole.id)) {
@@ -774,7 +782,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (action === 'reject') {
         if (record.status === 'rejected') {
-          return interaction.reply({ content: 'Ce membre a déjà été refusé.', ephemeral: true });
+          const originalModerator = record.rejectedBy
+            ? await interaction.guild.members.fetch(record.rejectedBy).catch(() => moderator)
+            : moderator;
+          return interaction.update(verificationPanel(member, 'rejected', originalModerator));
         }
         state.verifications[member.id] = {
           ...record,
