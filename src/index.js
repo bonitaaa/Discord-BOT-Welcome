@@ -37,7 +37,7 @@ const config = {
   waitingChannelId: process.env.WAITING_CHANNEL_ID || '1567273450085687338',
   verificationChannelId: process.env.VERIFICATION_CHANNEL_ID || '1567273469270564966',
   verifiedWelcomeChannelId: process.env.VERIFIED_WELCOME_CHANNEL_ID || '1563618087255941381',
-  candySyncChannelId: process.env.CANDY_SYNC_CHANNEL_ID || '1565775071489040394',
+  candySyncChannelId: process.env.CANDY_SYNC_CHANNEL_ID || '1567649267361910844',
   dataFile: process.env.DATA_FILE || path.join(process.env.DATA_DIR || path.join(process.cwd(), 'data'), 'welcome-state.json'),
 };
 
