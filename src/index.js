@@ -612,6 +612,12 @@ async function removeLegacyMemberPermissionOverwrites(guild) {
 
 async function openVerificationThread(interaction, member) {
   const record = state.verifications[member.id] || {};
+  if (record.threadModeratorId && record.threadModeratorId !== interaction.user.id) {
+    const assignedModerator = await interaction.guild.members.fetch(record.threadModeratorId).catch(() => null);
+    const error = new Error('VERIFICATION_ALREADY_ASSIGNED');
+    error.assignedModerator = assignedModerator;
+    throw error;
+  }
   let thread = record.threadId
     ? await interaction.guild.channels.fetch(record.threadId).catch(() => null)
     : null;
@@ -630,12 +636,27 @@ async function openVerificationThread(interaction, member) {
       content: `${member}, ce fil est privé. Tu peux répondre ici aux questions de l’équipe de modération.`,
       allowedMentions: { users: [member.id] },
     });
-    state.verifications[member.id] = { ...record, status: record.status || 'pending', threadId: thread.id };
+    state.verifications[member.id] = {
+      ...record,
+      status: record.status || 'pending',
+      threadId: thread.id,
+      threadModeratorId: interaction.user.id,
+      threadOpenedAt: Date.now(),
+    };
     saveState();
   } else {
     await thread.setArchived(false).catch(() => {});
     await thread.members.add(member.id).catch(() => {});
     await thread.members.add(interaction.user.id).catch(() => {});
+    if (!record.threadModeratorId) {
+      state.verifications[member.id] = {
+        ...record,
+        threadId: thread.id,
+        threadModeratorId: interaction.user.id,
+        threadOpenedAt: Date.now(),
+      };
+      saveState();
+    }
   }
   return thread;
 }
@@ -728,8 +749,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (action === 'thread') {
         await interaction.deferReply({ ephemeral: true });
-        const thread = await openVerificationThread(interaction, member);
-        return interaction.editReply(`Fil privé ouvert : ${thread}`);
+        try {
+          const thread = await openVerificationThread(interaction, member);
+          return interaction.editReply(`Fil privé ouvert : ${thread}. Tu es maintenant la seule personne pouvant accepter ou refuser ce membre.`);
+        } catch (error) {
+          if (error.message !== 'VERIFICATION_ALREADY_ASSIGNED') throw error;
+          return interaction.editReply(`Cette vérification est déjà prise en charge par ${error.assignedModerator ?? `<@${record.threadModeratorId}>`}. Seule cette personne peut l’accepter ou la refuser.`);
+        }
+      }
+
+      if (['accept', 'reject'].includes(action)
+        && record.threadModeratorId
+        && record.threadModeratorId !== interaction.user.id) {
+        return interaction.reply({
+          content: `Cette vérification est prise en charge par <@${record.threadModeratorId}>. Seule cette personne peut accepter ou refuser le membre.`,
+          ephemeral: true,
+          allowedMentions: { users: [] },
+        });
       }
 
       if (action === 'accept') {
