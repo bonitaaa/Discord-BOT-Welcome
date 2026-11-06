@@ -74,6 +74,16 @@ const VERIFICATION_MODERATOR_ROLE_IDS = new Set([
   '1565392656970817568',
 ]);
 
+function verificationModeratorRoleIds(guild) {
+  const roleIds = new Set(VERIFICATION_MODERATOR_ROLE_IDS);
+  const prestigeRole = guild?.roles.cache.find((role) => {
+    const name = role.name.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+    return name === 'prestige' || name === 'pvcool prestige' || name.endsWith(' prestige');
+  });
+  if (prestigeRole) roleIds.add(prestigeRole.id);
+  return [...roleIds];
+}
+
 function waitingRoleId() {
   return state.config.waitingRoleId || config.waitingRoleId;
 }
@@ -375,7 +385,7 @@ function canConfigure(userId) {
 
 function canVerify(member) {
   return config.owners.has(member.id)
-    || [...VERIFICATION_MODERATOR_ROLE_IDS].some((roleId) => member.roles.cache.has(roleId));
+    || verificationModeratorRoleIds(member.guild).some((roleId) => member.roles.cache.has(roleId));
 }
 
 function verificationPanel(member, status = 'pending', moderator = null) {
@@ -409,7 +419,7 @@ function verificationPanel(member, status = 'pending', moderator = null) {
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent([
         ...(!accepted && !rejected
-          ? [[...VERIFICATION_MODERATOR_ROLE_IDS].map((roleId) => `<@&${roleId}>`).join(' ')]
+          ? [verificationModeratorRoleIds(member.guild).map((roleId) => `<@&${roleId}>`).join(' ')]
           : []),
         `-# PVCool · ${presentation.eyebrow}`,
       ].join('\n')),
@@ -471,7 +481,7 @@ async function beginVerification(member) {
   const message = await verificationChannel.send({
     ...verificationPanel(member),
     allowedMentions: {
-      roles: [...VERIFICATION_MODERATOR_ROLE_IDS],
+      roles: verificationModeratorRoleIds(member.guild),
       users: [member.id],
     },
   });
