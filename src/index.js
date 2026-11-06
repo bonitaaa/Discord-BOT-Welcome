@@ -8,13 +8,11 @@ const {
   Events,
   GatewayIntentBits,
   MessageFlags,
-  PermissionFlagsBits,
   REST,
   Routes,
   SeparatorBuilder,
   SeparatorSpacingSize,
   SectionBuilder,
-  SlashCommandBuilder,
   TextDisplayBuilder,
   ThumbnailBuilder,
   UserSelectMenuBuilder,
@@ -28,7 +26,6 @@ const config = {
   guildId: process.env.GUILD_ID,
   welcomeChannelId: process.env.WELCOME_CHANNEL_ID,
   enabled: process.env.WELCOME_ENABLED !== 'false',
-  privateTesterId: process.env.PRIVATE_TESTER_ID || process.env.WELCOME_TESTER_ID || '317270244815011840',
   owners: new Set((process.env.OWNER_IDS || '317270244815011840,1526355772831957012').split(',').map((id) => id.trim()).filter(Boolean)),
   personalRoleChannelId: process.env.PERSONAL_ROLE_CHANNEL_ID || '1566461084712312852',
   personalVoiceChannelId: process.env.PERSONAL_VOICE_CHANNEL_ID || '1565752911433302096',
@@ -106,7 +103,7 @@ const copy = {
     doneTitle: 'Tu connais maintenant l’essentiel',
     done: `Tu sais comment fonctionnent les whitelists, les rôles personnels, les vocaux personnels et le support. Bienvenue sur pvcool !`,
     expired: 'Ce bouton appartient à une ancienne étape. Utilise les boutons du message actuel.',
-    unavailable: 'Ce parcours n’est plus actif. Relance `/welcome-test` si nécessaire.',
+    unavailable: 'Ce parcours n’est plus actif.',
   },
   en: {
     title: 'Welcome to pvcool',
@@ -117,7 +114,7 @@ const copy = {
     doneTitle: 'You now know the essentials',
     done: 'You now understand whitelists, personal roles, personal voice channels and support. Welcome to pvcool!',
     expired: 'This button belongs to an older step. Use the buttons on the current message.',
-    unavailable: 'This tutorial is no longer active. Run `/welcome-test` again if needed.',
+    unavailable: 'This tutorial is no longer active.',
   },
 };
 
@@ -377,10 +374,6 @@ async function requestSponsorshipReward(guild, newcomerId, sponsoredUserId) {
     content: `Welcomebot sponsorship reward v1:${newcomerId}:${sponsoredUserId}:300`,
     allowedMentions: { parse: [] },
   });
-}
-
-function canConfigure(userId) {
-  return config.owners.has(userId);
 }
 
 function canVerify(member) {
@@ -647,17 +640,9 @@ async function openVerificationThread(interaction, member) {
   return thread;
 }
 
-const commands = [
-  new SlashCommandBuilder()
-    .setName('welcome-config')
-    .setDescription('Configure le salon du parcours de bienvenue')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .addChannelOption((option) => option.setName('salon').setDescription('Salon où créer les fils').setRequired(true)),
-  new SlashCommandBuilder()
-    .setName('welcome-test')
-    .setDescription('Lance le parcours de bienvenue en mode test privé')
-    .addUserOption((option) => option.setName('membre').setDescription('Membre à tester (owners uniquement)')),
-].map((command) => command.toJSON());
+// Le bot ne publie aucune commande slash. Ce tableau vide supprime également
+// les anciennes commandes encore enregistrées auprès de Discord.
+const commands = [];
 
 client.once(Events.ClientReady, async (readyClient) => {
   const rest = new REST({ version: '10' }).setToken(config.token);
@@ -822,30 +807,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
           }).catch(() => {});
         });
         return;
-      }
-    }
-
-    if (interaction.isChatInputCommand()) {
-      if (interaction.commandName === 'welcome-config') {
-        if (!canConfigure(interaction.user.id)) return interaction.reply({ content: 'Commande réservée aux propriétaires.', ephemeral: true });
-        const channel = interaction.options.getChannel('salon', true);
-        if (!channel.threads) return interaction.reply({ content: 'Ce salon ne permet pas de créer des fils.', ephemeral: true });
-        state.config.welcomeChannelId = channel.id;
-        saveState();
-        return interaction.reply({ content: `Salon d’accueil configuré : ${channel}.`, ephemeral: true });
-      }
-
-      if (interaction.commandName === 'welcome-test') {
-        const allowed = canConfigure(interaction.user.id) || interaction.user.id === config.privateTesterId;
-        if (!allowed) return interaction.reply({ content: 'Cette commande de test est privée.', ephemeral: true });
-        const selected = interaction.options.getUser('membre');
-        if (selected && !canConfigure(interaction.user.id) && selected.id !== interaction.user.id) {
-          return interaction.reply({ content: 'Tu peux uniquement tester ton propre parcours.', ephemeral: true });
-        }
-        const target = await interaction.guild.members.fetch(selected?.id || interaction.user.id);
-        await interaction.deferReply({ ephemeral: true });
-        const thread = await createWelcomeThread(target, { forceReset: true });
-        return interaction.editReply(`Parcours privé recréé dans ${thread}.`);
       }
     }
 
