@@ -13,12 +13,17 @@ Le tutoriel est organisé en quatre étapes :
 
 Chaque question propose plusieurs réponses. Une mauvaise réponse affiche une explication claire avant de laisser le membre réessayer. Le bot modifie un seul panneau dans le fil afin d'éviter le spam.
 
-Le parcours est désactivé par défaut. Tant que `WELCOME_ENABLED=false`, aucune arrivée ne déclenche de fil. La commande `/welcome-test` permet néanmoins au testeur privé ou à un propriétaire de tester le parcours.
+Le parcours est désactivé par défaut. Tant que `WELCOME_ENABLED=false`, aucune arrivée ne déclenche le parcours automatique.
 
-## Commandes
+## Fonctions incluses
 
-- `/welcome-test` — lance le tutoriel uniquement pour l'utilisateur autorisé.
-- `/welcome-config` — choisit le salon d'accueil et active ou désactive le parcours automatique (propriétaires uniquement).
+- attribution et protection du rôle d’attente ;
+- panneau de vérification avec acceptation, refus et fil privé ;
+- parcours d’accueil interactif en français ou en anglais ;
+- parrainage final avec demande de récompense au service des flocons ;
+- sauvegarde persistante des profils, sessions et vérifications.
+
+Le bot ne publie actuellement aucune commande slash. Au démarrage, il retire les anciennes commandes enregistrées afin de ne laisser aucune commande obsolète.
 
 ## Installation sur Railway
 
@@ -27,18 +32,29 @@ Le parcours est désactivé par défaut. Tant que `WELCOME_ENABLED=false`, aucun
 3. Lui accorder : voir les salons, envoyer des messages, créer et gérer des fils, et ajouter des membres aux fils.
 4. Copier les variables de `.env.example` dans Railway.
 5. Monter un volume persistant sur `/data`.
-6. Définir le salon avec `/welcome-config` ou `WELCOME_CHANNEL_ID`.
+6. Définir le salon avec `WELCOME_CHANNEL_ID`.
 7. Passer `WELCOME_ENABLED=true` lorsque le tutoriel doit être envoyé aux nouveaux membres.
 
 Variables indispensables : `DISCORD_TOKEN` et `GUILD_ID`. `CLIENT_ID` est facultatif : le bot récupère automatiquement l'identifiant de son application.
 
-Le bot ne donne aucun rôle et ne modifie aucune permission : il sert uniquement de guide interactif vers les systèmes déjà gérés par les autres bots.
+Le bot ne gère que le rôle d’attente et ses permissions d’isolement. Il n’administre pas les rôles personnels, les salons vocaux personnels ni les tickets présentés dans le tutoriel.
 
 ## Vérification locale
 
 ```bash
 npm install
 npm run check
+npm test
 npm start
 ```
+
+Les données sont conservées dans `data/welcome-state.json` (ou dans le chemin indiqué par `DATA_FILE`). Ce fichier n’est pas publié sur GitHub.
+
+## Périmètre
+
+Ce dépôt contient uniquement WelcomeBot : accueil, rôle d’attente, vérification et parrainage de fin de parcours. Il ne contient aucun moteur de tickets, quiz, statistiques, modération générale, rôles personnels ou salons vocaux personnels. Les références à ces services dans le tutoriel sont uniquement des explications ou des destinations Discord ; WelcomeBot ne les implémente pas.
+
+## Sécurité
+
+Ne publie jamais le fichier `.env`, le jeton Discord ou les données des membres. Consulte [SECURITY.md](SECURITY.md) pour signaler un problème sensible.
 

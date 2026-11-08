@@ -17,8 +17,8 @@ const {
   ThumbnailBuilder,
   UserSelectMenuBuilder,
 } = require('discord.js');
-const fs = require('node:fs');
 const path = require('node:path');
+const { createStateStore } = require('./store');
 
 const config = {
   token: process.env.DISCORD_TOKEN,
@@ -34,7 +34,7 @@ const config = {
   waitingChannelId: process.env.WAITING_CHANNEL_ID || '1567273450085687338',
   verificationChannelId: process.env.VERIFICATION_CHANNEL_ID || '1567273469270564966',
   verifiedWelcomeChannelId: process.env.VERIFIED_WELCOME_CHANNEL_ID || '1563618087255941381',
-  candySyncChannelId: process.env.CANDY_SYNC_CHANNEL_ID || '1567649267361910844',
+  sponsorshipSyncChannelId: process.env.SPONSORSHIP_SYNC_CHANNEL_ID || '1567649267361910844',
   dataFile: process.env.DATA_FILE || path.join(process.env.DATA_DIR || path.join(process.cwd(), 'data'), 'welcome-state.json'),
 };
 
@@ -42,28 +42,8 @@ if (!config.token || !config.guildId) {
   throw new Error('DISCORD_TOKEN et GUILD_ID sont obligatoires.');
 }
 
-const emptyState = () => ({ config: {}, profiles: {}, sessions: {}, verifications: {} });
-
-function loadState() {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(config.dataFile, 'utf8'));
-    return {
-      config: parsed.config || {},
-      profiles: Object.fromEntries(Object.entries(parsed.profiles || {}).map(([id, profile]) => [id, {
-        language: profile.language === 'en' ? 'en' : profile.language === 'fr' ? 'fr' : null,
-        completed: Array.isArray(profile.completed) ? profile.completed.filter((value) => typeof value === 'string') : [],
-        sponsoredUserId: typeof profile.sponsoredUserId === 'string' ? profile.sponsoredUserId : null,
-      }])),
-      sessions: parsed.sessions || {},
-      verifications: parsed.verifications || {},
-    };
-  } catch (error) {
-    if (error.code !== 'ENOENT') console.error('Lecture de la sauvegarde impossible :', error);
-    return emptyState();
-  }
-}
-
-let state = loadState();
+const stateStore = createStateStore(config.dataFile);
+let state = stateStore.load();
 const authorizedWaitingRoleRemovals = new Set();
 const VERIFICATION_MODERATOR_ROLE_IDS = new Set([
   '1565034303560355870',
@@ -86,11 +66,7 @@ function waitingRoleId() {
 }
 
 function saveState() {
-  const folder = path.dirname(config.dataFile);
-  fs.mkdirSync(folder, { recursive: true });
-  const temporary = `${config.dataFile}.tmp`;
-  fs.writeFileSync(temporary, JSON.stringify(state, null, 2));
-  fs.renameSync(temporary, config.dataFile);
+  stateStore.save(state);
 }
 
 const copy = {
@@ -366,9 +342,9 @@ async function updateWelcomePanel(interaction, profile, member) {
 }
 
 async function requestSponsorshipReward(guild, newcomerId, sponsoredUserId) {
-  const channel = await guild.channels.fetch(config.candySyncChannelId).catch(() => null);
+  const channel = await guild.channels.fetch(config.sponsorshipSyncChannelId).catch(() => null);
   if (!channel?.isTextBased() || !('send' in channel)) {
-    throw new Error(`Salon de synchronisation des flocons ${config.candySyncChannelId} introuvable.`);
+    throw new Error(`Salon de synchronisation du parrainage ${config.sponsorshipSyncChannelId} introuvable.`);
   }
   return channel.send({
     content: `Welcomebot sponsorship reward v1:${newcomerId}:${sponsoredUserId}:300`,
