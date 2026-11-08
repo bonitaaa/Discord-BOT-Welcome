@@ -1,6 +1,14 @@
-# pvcool · Welcomebot
+# Discord BOT Welcome
 
 Bot Discord séparé qui accueille les nouveaux membres dans un fil privé et leur explique le fonctionnement réel de pvcool.
+
+## Installation
+
+```bash
+git clone https://github.com/bonitaaa/Discord-BOT-Welcome.git
+cd Discord-BOT-Welcome
+npm ci
+```
 
 ## Parcours d'accueil
 

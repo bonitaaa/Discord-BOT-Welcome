@@ -5,7 +5,7 @@
   "license": "UNLICENSED",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/bonitaaa/welcomebot.git"
+    "url": "git+https://github.com/bonitaaa/Discord-BOT-Welcome.git"
   },
   "main": "src/index.js",
   "scripts": {
